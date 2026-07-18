@@ -20,7 +20,7 @@
     {
       "id": "101-1",
       "callsign": "101",
-      "name": "K. Sterling",
+      "name": "B. Slade",
       "activity": "Active",
       "rank": "Chief",
       "divisions": {
@@ -38,41 +38,18 @@
         "3": false
       },
       "notes": "Amineee03",
-      "promotionDate": "08/06/2025",
-      "tig": "307",
-      "vacant": false
+      "employeeNotes": "",
+      "promotionDate": "2025-08-06",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "102-2",
       "callsign": "102",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Assistant Chief",
-      "divisions": {
-        "Canine": true,
-        "DCI": true,
-        "TEU": true,
-        "AIR-1": true,
-        "S.E.R.T": true,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "46182",
-      "vacant": true
-    },
-    {
-      "id": "103-3",
-      "callsign": "103",
       "name": "R. Longdonger",
       "activity": "Active",
-      "rank": "Deputy Chief",
+      "rank": "Assistant Chief",
       "divisions": {
         "Canine": false,
         "DCI": false,
@@ -88,9 +65,39 @@
         "3": false
       },
       "notes": "Cornwood",
-      "promotionDate": "01/11/2026",
-      "tig": "149",
-      "vacant": false
+      "employeeNotes": "",
+      "promotionDate": "2026-06-15",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
+    },
+    {
+      "id": "103-3",
+      "callsign": "103",
+      "name": "",
+      "activity": "Vacant",
+      "rank": "Deputy Chief",
+      "divisions": {
+        "Canine": false,
+        "DCI": false,
+        "TEU": false,
+        "AIR-1": true,
+        "S.E.R.T": false,
+        "CFR": false,
+        "TBD": false
+      },
+      "strikes": {
+        "1": false,
+        "2": false,
+        "3": false
+      },
+      "notes": "",
+      "employeeNotes": "",
+      "promotionDate": "",
+      "tig": "",
+      "vacant": true,
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-16T04:02:01.151Z"
     },
     {
       "id": "104-4",
@@ -237,10 +244,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "04/03/2026",
-      "tig": "67",
-      "vacant": false
+      "notes": "hondo.l",
+      "employeeNotes": "",
+      "promotionDate": "2026-04-03",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "slot-10",
@@ -312,10 +321,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
+      "notes": "1tzdark",
+      "employeeNotes": "",
       "promotionDate": "",
-      "tig": "46182",
-      "vacant": false
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "206-13",
@@ -343,16 +354,16 @@
       "vacant": true
     },
     {
-      "id": "207-14",
+      "id": "ff51ffed-6fd1-41d7-8353-f2979189dd2b",
       "callsign": "207",
-      "name": "",
-      "activity": "Vacant",
+      "name": "J. Pickens",
+      "activity": "Active",
       "rank": "Lieutenant",
       "divisions": {
         "Canine": false,
-        "DCI": true,
-        "TEU": true,
-        "AIR-1": true,
+        "DCI": false,
+        "TEU": false,
+        "AIR-1": false,
         "S.E.R.T": false,
         "CFR": false,
         "TBD": false
@@ -362,10 +373,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
+      "notes": "drxp9",
+      "employeeNotes": "Came back on FTE",
       "promotionDate": "",
-      "tig": "46182",
-      "vacant": true
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": true
     },
     {
       "id": "209-15",
@@ -387,10 +400,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
+      "notes": "icu_medic",
+      "employeeNotes": "",
       "promotionDate": "",
-      "tig": "46182",
-      "vacant": false
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "210-16",
@@ -412,24 +427,26 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "4/3/26",
-      "tig": "67",
-      "vacant": false
+      "notes": "bagsoverbrokenhearts",
+      "employeeNotes": "",
+      "promotionDate": "",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "211-17",
       "callsign": "211",
-      "name": "J. Gonzales",
+      "name": "J. Gonzalez",
       "activity": "Active",
       "rank": "Staff Sergeant",
       "divisions": {
         "Canine": false,
         "DCI": false,
         "TEU": false,
-        "AIR-1": false,
+        "AIR-1": true,
         "S.E.R.T": false,
-        "CFR": false,
+        "CFR": true,
         "TBD": false
       },
       "strikes": {
@@ -438,9 +455,11 @@
         "3": false
       },
       "notes": "",
-      "promotionDate": "06/01/2026",
-      "tig": "8",
-      "vacant": false
+      "employeeNotes": "",
+      "promotionDate": "2026-06-01",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": true
     },
     {
       "id": "212-18",
@@ -518,11 +537,11 @@
       "vacant": true
     },
     {
-      "id": "213-21",
-      "callsign": "213",
+      "id": "215-22",
+      "callsign": "215",
       "name": "",
       "activity": "Vacant",
-      "rank": "Staff Sergeant DCI",
+      "rank": "Sergeant",
       "divisions": {
         "Canine": false,
         "DCI": false,
@@ -540,32 +559,10 @@
       "notes": "",
       "promotionDate": "",
       "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "215-22",
-      "callsign": "215",
-      "name": "Buford Malone III",
-      "activity": "Active",
-      "rank": "Sergeant",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "red_sworm",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": false
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-07-03T20:26:38.618Z"
     },
     {
       "id": "216-23",
@@ -868,15 +865,15 @@
       "vacant": false
     },
     {
-      "id": "320-35",
+      "id": "6147c72b-dc2a-4a33-b1ac-1b667483fb46",
       "callsign": "320",
-      "name": "",
-      "activity": "Vacant",
+      "name": "B. Tucker",
+      "activity": "Active",
       "rank": "Corporal",
       "divisions": {
         "Canine": false,
         "DCI": false,
-        "TEU": false,
+        "TEU": true,
         "AIR-1": false,
         "S.E.R.T": false,
         "CFR": false,
@@ -887,10 +884,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "46182",
-      "vacant": true
+      "notes": "c3z3",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-12",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "321-36",
@@ -1093,10 +1092,10 @@
       "vacant": false
     },
     {
-      "id": "343-44",
+      "id": "ccf835ed-16e8-4428-ab99-54c0e6dee8a2",
       "callsign": "343",
-      "name": "",
-      "activity": "Vacant",
+      "name": "M. Carter",
+      "activity": "Active",
       "rank": "Sr. Officer",
       "divisions": {
         "Canine": false,
@@ -1112,10 +1111,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "ratherjustshine",
+      "employeeNotes": "Rehired by R. Longdonger",
+      "promotionDate": "2026-06-15",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "344-45",
@@ -1619,31 +1620,6 @@
     },
     {
       "id": "364-65",
-      "callsign": "364",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Sr. Officer",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "364-66",
       "callsign": "364",
       "name": "",
       "activity": "Vacant",
@@ -2443,381 +2419,6 @@
       "vacant": true
     },
     {
-      "id": "411-98",
-      "callsign": "411",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "412-99",
-      "callsign": "412",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "413-100",
-      "callsign": "413",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "414-101",
-      "callsign": "414",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "415-102",
-      "callsign": "415",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "416-103",
-      "callsign": "416",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "417-104",
-      "callsign": "417",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "418-105",
-      "callsign": "418",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "419-106",
-      "callsign": "419",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "421-107",
-      "callsign": "421",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "422-108",
-      "callsign": "422",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "423-109",
-      "callsign": "423",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "424-110",
-      "callsign": "424",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "425-111",
-      "callsign": "425",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
-      "id": "426-112",
-      "callsign": "426",
-      "name": "",
-      "activity": "Vacant",
-      "rank": "Officer II",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
-    },
-    {
       "id": "427-113",
       "callsign": "427",
       "name": "",
@@ -3018,10 +2619,10 @@
       "vacant": false
     },
     {
-      "id": "457-121",
+      "id": "360ab03a-c71c-4c6d-810f-095d364d5bd3",
       "callsign": "457",
-      "name": "T. Jackson",
-      "activity": "Vacant",
+      "name": "J. Walker",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3037,10 +2638,12 @@
         "2": false,
         "3": false
       },
-      "notes": "z1cm",
-      "promotionDate": "06/07/2026",
+      "notes": "ashurawrld",
+      "employeeNotes": "Lateral transfer of Hondo",
+      "promotionDate": "2026-07-03",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": true
     },
     {
       "id": "458-122",
@@ -3093,10 +2696,10 @@
       "vacant": false
     },
     {
-      "id": "460-124",
+      "id": "15337f68-eb11-4386-ad61-e1602105ed18",
       "callsign": "460",
-      "name": "",
-      "activity": "Vacant",
+      "name": "D. Luca",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3112,16 +2715,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "hyp7r",
+      "employeeNotes": "",
+      "promotionDate": "2026-07-03",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": true
     },
     {
       "id": "461-125",
       "callsign": "461",
-      "name": "",
-      "activity": "Vacant",
+      "name": "C. Walker",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3137,10 +2742,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "metrospectro",
+      "employeeNotes": "Lateral Transfer , Hondo.",
+      "promotionDate": "2026-07-03",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": true
     },
     {
       "id": "462-126",
@@ -3718,10 +3325,10 @@
       "vacant": true
     },
     {
-      "id": "485-149",
+      "id": "283ff81c-9272-4f27-b2a4-bd81d2618149",
       "callsign": "485",
-      "name": "",
-      "activity": "Vacant",
+      "name": "C. Walker",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3738,9 +3345,11 @@
         "3": false
       },
       "notes": "",
-      "promotionDate": "",
+      "employeeNotes": "",
+      "promotionDate": "2026-07-04",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "486-150",
@@ -3770,8 +3379,8 @@
     {
       "id": "487-151",
       "callsign": "487",
-      "name": "",
-      "activity": "Vacant",
+      "name": "J. Henson",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3787,16 +3396,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "swiftlyfast_",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-04",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "488-152",
       "callsign": "488",
-      "name": "",
-      "activity": "Vacant",
+      "name": "C. Burnett",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3812,16 +3423,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
+      "notes": "Rkta07",
+      "employeeNotes": "",
+      "promotionDate": "05/11/2026",
+      "tig": "29",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "489-153",
       "callsign": "489",
-      "name": "",
-      "activity": "Vacant",
+      "name": "J. Woods",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3837,16 +3450,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "jayjay_45677",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-07",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "490-154",
       "callsign": "490",
-      "name": "",
-      "activity": "Vacant",
+      "name": "R. James",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3862,16 +3477,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
+      "notes": "chipjusttooreal",
+      "employeeNotes": "",
       "promotionDate": "",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "491-155",
       "callsign": "491",
-      "name": "",
-      "activity": "Vacant",
+      "name": "J. Yates",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3887,16 +3504,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "parkrandom6095",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-06",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "492-156",
       "callsign": "492",
-      "name": "",
-      "activity": "Vacant",
+      "name": "F. Connors",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3912,16 +3531,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": true
+      "notes": "itz_richie999",
+      "employeeNotes": "",
+      "promotionDate": "6/7/26",
+      "tig": "2",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "493-157",
       "callsign": "493",
-      "name": "",
-      "activity": "Vacant",
+      "name": "D. Connors",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3937,16 +3558,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "evanconnors1212_73007",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-07",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "494-158",
       "callsign": "494",
-      "name": "",
-      "activity": "Vacant",
+      "name": "J. Young",
+      "activity": "Active",
       "rank": "Officer I",
       "divisions": {
         "Canine": false,
@@ -3962,10 +3585,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "goyard5600",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-06",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": true
     },
     {
       "id": "501-159",
@@ -4020,7 +3645,7 @@
     {
       "id": "503-161",
       "callsign": "503",
-      "name": "J. Young",
+      "name": "D. Jones",
       "activity": "Active",
       "rank": "Probationary Officer",
       "divisions": {
@@ -4037,10 +3662,12 @@
         "2": false,
         "3": false
       },
-      "notes": "goyard5600",
-      "promotionDate": "06/06/2026",
-      "tig": "3",
-      "vacant": false
+      "notes": "tyronesmith_",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-13",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "504-162",
@@ -4070,8 +3697,8 @@
     {
       "id": "505-163",
       "callsign": "505",
-      "name": "K. Hayes",
-      "activity": "Active",
+      "name": "",
+      "activity": "Vacant",
       "rank": "Probationary Officer",
       "divisions": {
         "Canine": false,
@@ -4087,16 +3714,19 @@
         "2": false,
         "3": false
       },
-      "notes": "5v7k_",
-      "promotionDate": "06/04/2026",
+      "notes": "",
+      "promotionDate": "",
       "tig": "5",
-      "vacant": false
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-07-04T06:21:24.216Z"
     },
     {
       "id": "506-164",
       "callsign": "506",
-      "name": "J. Henson",
-      "activity": "Active",
+      "name": "",
+      "activity": "Vacant",
       "rank": "Probationary Officer",
       "divisions": {
         "Canine": false,
@@ -4112,16 +3742,19 @@
         "2": false,
         "3": false
       },
-      "notes": "swiftlyfast_",
-      "promotionDate": "06/04/2026",
+      "notes": "",
+      "promotionDate": "",
       "tig": "5",
-      "vacant": false
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-27T19:36:27.954Z"
     },
     {
       "id": "507-165",
       "callsign": "507",
-      "name": "J. Yates",
-      "activity": "Active",
+      "name": "",
+      "activity": "Vacant",
       "rank": "Probationary Officer",
       "divisions": {
         "Canine": false,
@@ -4137,16 +3770,19 @@
         "2": false,
         "3": false
       },
-      "notes": "parkrandom6095",
-      "promotionDate": "06/06/2026",
+      "notes": "",
+      "promotionDate": "",
       "tig": "3",
-      "vacant": false
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-27T02:19:12.928Z"
     },
     {
       "id": "508-166",
       "callsign": "508",
-      "name": "D. Connors",
-      "activity": "Active",
+      "name": "",
+      "activity": "Vacant",
       "rank": "Probationary Officer",
       "divisions": {
         "Canine": false,
@@ -4162,16 +3798,19 @@
         "2": false,
         "3": false
       },
-      "notes": "evanconnors1212_73007",
-      "promotionDate": "06/07/2026",
+      "notes": "",
+      "promotionDate": "",
       "tig": "#REF!",
-      "vacant": false
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-27T02:18:42.817Z"
     },
     {
       "id": "509-167",
       "callsign": "509",
-      "name": "F. Connors",
-      "activity": "Active",
+      "name": "",
+      "activity": "Vacant",
       "rank": "Probationary Officer",
       "divisions": {
         "Canine": false,
@@ -4187,16 +3826,19 @@
         "2": false,
         "3": false
       },
-      "notes": "itz_richie999",
-      "promotionDate": "6/7/26",
+      "notes": "",
+      "promotionDate": "",
       "tig": "2",
-      "vacant": false
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-27T02:18:58.589Z"
     },
     {
       "id": "510-168",
       "callsign": "510",
-      "name": "C. Burnett",
-      "activity": "Active",
+      "name": "",
+      "activity": "Vacant",
       "rank": "Probationary Officer",
       "divisions": {
         "Canine": false,
@@ -4212,10 +3854,13 @@
         "2": false,
         "3": false
       },
-      "notes": "Rkta07",
-      "promotionDate": "05/11/2026",
+      "notes": "",
+      "promotionDate": "",
       "tig": "29",
-      "vacant": false
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-27T02:22:29.183Z"
     },
     {
       "id": "511-169",
@@ -4270,57 +3915,7 @@
     {
       "id": "513-171",
       "callsign": "513",
-      "name": "R. James",
-      "activity": "Active",
-      "rank": "Probationary Officer",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "chipjusttooreal",
-      "promotionDate": "",
-      "tig": "",
-      "vacant": false
-    },
-    {
-      "id": "514-172",
-      "callsign": "514",
-      "name": "J. Woods",
-      "activity": "Active",
-      "rank": "Probationary Officer",
-      "divisions": {
-        "Canine": false,
-        "DCI": false,
-        "TEU": false,
-        "AIR-1": false,
-        "S.E.R.T": false,
-        "CFR": false,
-        "TBD": false
-      },
-      "strikes": {
-        "1": false,
-        "2": false,
-        "3": false
-      },
-      "notes": "jayjay_45677",
-      "promotionDate": "06/07/2026",
-      "tig": "2",
-      "vacant": false
-    },
-    {
-      "id": "515-173",
-      "callsign": "515",
-      "name": "B. Williams",
+      "name": "",
       "activity": "Vacant",
       "rank": "Probationary Officer",
       "divisions": {
@@ -4337,10 +3932,68 @@
         "2": false,
         "3": false
       },
-      "notes": "kayden2tacy",
-      "promotionDate": "06/08/2026",
+      "notes": "",
+      "promotionDate": "",
+      "tig": "",
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-27T02:19:25.978Z"
+    },
+    {
+      "id": "514-172",
+      "callsign": "514",
+      "name": "",
+      "activity": "Vacant",
+      "rank": "Probationary Officer",
+      "divisions": {
+        "Canine": false,
+        "DCI": false,
+        "TEU": false,
+        "AIR-1": false,
+        "S.E.R.T": false,
+        "CFR": false,
+        "TBD": false
+      },
+      "strikes": {
+        "1": false,
+        "2": false,
+        "3": false
+      },
+      "notes": "",
+      "promotionDate": "",
+      "tig": "2",
+      "vacant": true,
+      "employeeNotes": "",
+      "clearedForPatrol": false,
+      "updatedAt": "2026-06-27T02:19:39.694Z"
+    },
+    {
+      "id": "515-173",
+      "callsign": "515",
+      "name": "",
+      "activity": "Vacant",
+      "rank": "Probationary Officer",
+      "divisions": {
+        "Canine": false,
+        "DCI": false,
+        "TEU": false,
+        "AIR-1": false,
+        "S.E.R.T": false,
+        "CFR": false,
+        "TBD": false
+      },
+      "strikes": {
+        "1": false,
+        "2": false,
+        "3": false
+      },
+      "notes": "",
+      "promotionDate": "",
       "tig": "1",
-      "vacant": true
+      "vacant": true,
+      "updatedAt": "2026-06-10T03:07:10.856Z",
+      "clearedForPatrol": false
     },
     {
       "id": "516-174",
@@ -4365,7 +4018,10 @@
       "notes": "",
       "promotionDate": "",
       "tig": "",
-      "vacant": true
+      "vacant": true,
+      "updatedAt": "2026-06-10T10:05:37.496Z",
+      "clearedForPatrol": false,
+      "employeeNotes": ""
     },
     {
       "id": "517-175",
@@ -5018,10 +4674,10 @@
       "vacant": true
     },
     {
-      "id": "543-201",
+      "id": "cda2cad2-89ae-4af5-99e6-ee661cbf4f5b",
       "callsign": "543",
-      "name": "",
-      "activity": "Vacant",
+      "name": "R. Banks",
+      "activity": "Active",
       "rank": "Probationary Officer",
       "divisions": {
         "Canine": false,
@@ -5037,10 +4693,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "unlockdakeys",
+      "employeeNotes": "",
+      "promotionDate": "2026-07-03",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": true
     },
     {
       "id": "544-202",
@@ -5593,10 +5251,10 @@
       "vacant": false
     },
     {
-      "id": "609-224",
+      "id": "a46b85b4-204e-48e5-b438-fd1e5552f236",
       "callsign": "609",
-      "name": "",
-      "activity": "Vacant",
+      "name": "L. Hart",
+      "activity": "Active",
       "rank": "Recruit",
       "divisions": {
         "Canine": false,
@@ -5612,10 +5270,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "06/06/2026",
-      "tig": "3",
-      "vacant": true
+      "notes": "killanem",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-19",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "610-225",
@@ -5818,10 +5478,10 @@
       "vacant": true
     },
     {
-      "id": "618-233",
+      "id": "408dda46-3c09-48ee-84b3-7919c8a15121",
       "callsign": "618",
-      "name": "",
-      "activity": "Vacant",
+      "name": "B. Briggs",
+      "activity": "Active",
       "rank": "Recruit",
       "divisions": {
         "Canine": false,
@@ -5837,10 +5497,12 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
-      "tig": "46182",
-      "vacant": true
+      "notes": "yk_tr",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-13",
+      "tig": "",
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "619-234",
@@ -7170,8 +6832,8 @@
     {
       "id": "672-287",
       "callsign": "672",
-      "name": "",
-      "activity": "Vacant",
+      "name": "Kymir Willams",
+      "activity": "Active",
       "rank": "Recruit",
       "divisions": {
         "Canine": false,
@@ -7187,16 +6849,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "1235989373820866671",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-11",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "673-288",
       "callsign": "673",
-      "name": "",
-      "activity": "Vacant",
+      "name": "Frederick Buford",
+      "activity": "Active",
       "rank": "Recruit",
       "divisions": {
         "Canine": false,
@@ -7212,16 +6876,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "beefnuggetss",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-11",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "674-289",
       "callsign": "674",
-      "name": "",
-      "activity": "Vacant",
+      "name": "Alex Reyes",
+      "activity": "Active",
       "rank": "Recruit",
       "divisions": {
         "Canine": false,
@@ -7237,16 +6903,18 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "1408236171972182016",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-11",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     },
     {
       "id": "675-290",
       "callsign": "675",
-      "name": "",
-      "activity": "Vacant",
+      "name": "Nola Garcia",
+      "activity": "Active",
       "rank": "Recruit",
       "divisions": {
         "Canine": false,
@@ -7262,10 +6930,14 @@
         "2": false,
         "3": false
       },
-      "notes": "",
-      "promotionDate": "",
+      "notes": "dewyontop",
+      "employeeNotes": "",
+      "promotionDate": "2026-06-10",
       "tig": "",
-      "vacant": true
+      "vacant": false,
+      "clearedForPatrol": false
     }
-  ]
+  ],
+  "updatedAt": "2026-07-18T23:48:53.135Z",
+  "updatedBy": "maintenance:dedupe-callsigns"
 }

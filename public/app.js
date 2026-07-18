@@ -1,5 +1,7 @@
-let divisions = ["ONB", "TEU", "AIR", "GIU", "DCI", "CSI"];
-let strikes = ["1", "2", "3"];
+// Populated from the API in loadRoster() — roster.json is the single source
+// of truth for divisions/strikes, don't hardcode a duplicate list here.
+let divisions = [];
+let strikes = [];
 
 let rosterData = { roster: [] };
 let sessionUser = null;

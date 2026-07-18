@@ -32,6 +32,33 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
 
+const SCRYPT_KEYLEN = 64;
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN);
+  return `scrypt:${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+// Legacy (pre-hashing) accounts still store a plain password string — fall
+// back to a direct compare for those so existing logins don't break, and let
+// the login handler upgrade them to a hash on next successful sign-in.
+function verifyPassword(password, stored) {
+  const parts = String(stored || "").split(":");
+  if (parts.length !== 3 || parts[0] !== "scrypt") {
+    return stored === password;
+  }
+  const [, saltHex, hashHex] = parts;
+  const expected = Buffer.from(hashHex, "hex");
+  const actual = crypto.scryptSync(password, Buffer.from(saltHex, "hex"), expected.length);
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function isHashedPassword(stored) {
+  const parts = String(stored || "").split(":");
+  return parts.length === 3 && parts[0] === "scrypt";
+}
+
 async function writeJson(filePath, payload) {
   await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -140,11 +167,14 @@ function sanitizeRosterEntry(input, existing = {}) {
 
 function sanitizeUser(input, existing = {}) {
   const email = String(input.email || existing.email || "").trim().toLowerCase();
+  const nextPassword = String(input.password || "").trim()
+    ? hashPassword(String(input.password).trim())
+    : existing.password || hashPassword("changeme");
   return {
     id: existing.id || crypto.randomUUID(),
     name: String(input.name || existing.name || "").trim(),
     email,
-    password: String(input.password || existing.password || "changeme"),
+    password: nextPassword,
     role: String(input.role || existing.role || "viewer").trim(),
     canEditRoster: Boolean(input.canEditRoster),
     canManageUsers: Boolean(input.canManageUsers),
@@ -253,15 +283,20 @@ async function handleApi(req, res) {
 
   if (req.method === "POST" && url.pathname === "/api/login") {
     const credentials = await bodyJson(req);
-    const { users } = await readJson(usersPath);
-    const matched = users.find(
+    const password = String(credentials.password || "");
+    const data = await readJson(usersPath);
+    const matched = data.users.find(
       (candidate) =>
         candidate.email.toLowerCase() === String(credentials.email || "").trim().toLowerCase() &&
-        candidate.password === String(credentials.password || "")
+        verifyPassword(password, candidate.password)
     );
     if (!matched) {
       send(res, 401, { error: "Invalid email or password." });
       return;
+    }
+    if (!isHashedPassword(matched.password)) {
+      matched.password = hashPassword(password);
+      await writeJson(usersPath, data);
     }
     const token = crypto.randomBytes(32).toString("hex");
     sessions.set(token, { userId: matched.id, createdAt: Date.now() });
@@ -714,7 +749,7 @@ async function handleApi(req, res) {
       id: crypto.randomUUID(),
       name,
       email,
-      password,
+      password: hashPassword(password),
       role: "viewer",
       canEditRoster: false,
       canManageUsers: false,
