@@ -59,6 +59,18 @@ function isHashedPassword(stored) {
   return parts.length === 3 && parts[0] === "scrypt";
 }
 
+// Returns the roster entry already holding this callsign if it's occupied by
+// someone else, or null if the callsign is free to assign (vacant or unused).
+function occupiedCallsignConflict(rosterEntries, callsign, excludeId = null) {
+  const trimmed = String(callsign || "").trim();
+  if (!trimmed) return null;
+  const match = rosterEntries.find(
+    (e) => e.id !== excludeId && String(e.callsign || "").trim() === trimmed
+  );
+  if (!match) return null;
+  return !match.vacant && match.activity !== "Vacant" && match.name ? match : null;
+}
+
 async function writeJson(filePath, payload) {
   await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -367,18 +379,18 @@ async function handleApi(req, res) {
     const payload = await bodyJson(req);
     const data = await readJson(rosterPath);
     const callsign = String(payload.callsign || "").trim();
+    const conflict = occupiedCallsignConflict(data.roster, callsign);
+    if (conflict) {
+      send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
+      return;
+    }
     const existingIndex = callsign
       ? data.roster.findIndex((e) => String(e.callsign || "").trim() === callsign)
       : -1;
 
     if (existingIndex !== -1) {
-      const existing = data.roster[existingIndex];
-      const isOccupied = !existing.vacant && existing.activity !== "Vacant" && existing.name;
-      if (isOccupied) {
-        send(res, 409, { error: `Callsign ${callsign} is already assigned to ${existing.name}.` });
-        return;
-      }
       // Callsign matches an existing vacant slot — fill it instead of creating a duplicate row.
+      const existing = data.roster[existingIndex];
       const entry = sanitizeRosterEntry(payload, existing);
       data.roster[existingIndex] = entry;
       data.updatedAt = new Date().toISOString();
@@ -523,6 +535,12 @@ async function handleApi(req, res) {
       }, roster.roster[vacantIndex]);
       roster.roster[vacantIndex] = entry;
     } else {
+      const callsign = String(payload.callsign || "").trim();
+      const conflict = occupiedCallsignConflict(roster.roster, callsign);
+      if (conflict) {
+        send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
+        return;
+      }
       entry = sanitizeRosterEntry({
         callsign: payload.callsign,
         name: application.name,
@@ -718,6 +736,12 @@ async function handleApi(req, res) {
         // Fallback: no matching vacant slot, just update the existing entry in place
         const rIdx = roster.roster.findIndex((e) => e.id === board.cards[cardIdx].rosterId);
         if (rIdx !== -1) {
+          const callsign = String(payload.callsign || "").trim();
+          const conflict = occupiedCallsignConflict(roster.roster, callsign, roster.roster[rIdx].id);
+          if (conflict) {
+            send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
+            return;
+          }
           roster.roster[rIdx].rank = newRank;
           roster.roster[rIdx].callsign = payload.callsign;
           roster.roster[rIdx].activity = "Active";
