@@ -366,6 +366,28 @@ async function handleApi(req, res) {
     if (!requireEdit(user, res)) return;
     const payload = await bodyJson(req);
     const data = await readJson(rosterPath);
+    const callsign = String(payload.callsign || "").trim();
+    const existingIndex = callsign
+      ? data.roster.findIndex((e) => String(e.callsign || "").trim() === callsign)
+      : -1;
+
+    if (existingIndex !== -1) {
+      const existing = data.roster[existingIndex];
+      const isOccupied = !existing.vacant && existing.activity !== "Vacant" && existing.name;
+      if (isOccupied) {
+        send(res, 409, { error: `Callsign ${callsign} is already assigned to ${existing.name}.` });
+        return;
+      }
+      // Callsign matches an existing vacant slot — fill it instead of creating a duplicate row.
+      const entry = sanitizeRosterEntry(payload, existing);
+      data.roster[existingIndex] = entry;
+      data.updatedAt = new Date().toISOString();
+      data.updatedBy = user.email;
+      await writeJson(rosterPath, data);
+      send(res, 201, entry);
+      return;
+    }
+
     const entry = sanitizeRosterEntry(payload);
     data.roster.push(entry);
     data.updatedAt = new Date().toISOString();

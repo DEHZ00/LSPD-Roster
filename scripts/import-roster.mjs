@@ -4,6 +4,36 @@ import path from "node:path";
 const sourcePath = path.resolve("data/source-roster.csv");
 const outputPath = path.resolve("data/roster.json");
 
+// Same sheet the original CSV export came from — pass a different sheet URL
+// or ID as the first CLI arg to import from somewhere else.
+const DEFAULT_SHEET_ID = "1g5PBLmzfN8e0MIrcvCE4dswRjdX43onfju5OsX72u5U";
+const DEFAULT_SHEET_GID = "1481132815";
+
+function parseSheetArg(arg) {
+  if (!arg) return { id: DEFAULT_SHEET_ID, gid: DEFAULT_SHEET_GID };
+  const idMatch = arg.match(/\/d\/([a-zA-Z0-9-_]+)/);
+  const gidMatch = arg.match(/[?&#]gid=(\d+)/);
+  return {
+    id: idMatch ? idMatch[1] : arg,
+    gid: gidMatch ? gidMatch[1] : DEFAULT_SHEET_GID
+  };
+}
+
+async function fetchSheetCsv(sheetArg) {
+  const { id, gid } = parseSheetArg(sheetArg);
+  const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Sheet fetch failed (${response.status}). Is it shared as "Anyone with the link can view"?`);
+  }
+  const csv = await response.text();
+  // Google returns a 200 HTML sign-in page instead of CSV for private sheets.
+  if (/^\s*<!DOCTYPE html/i.test(csv)) {
+    throw new Error("Sheet did not return CSV (likely private). Share it as \"Anyone with the link can view\".");
+  }
+  return csv;
+}
+
 function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -93,7 +123,16 @@ function hasRosterShape(cells, columns) {
   );
 }
 
-const csv = await fs.readFile(sourcePath, "utf8");
+const sheetArg = process.argv[2];
+let csv;
+try {
+  csv = await fetchSheetCsv(sheetArg);
+  await fs.writeFile(sourcePath, csv);
+  console.log("Fetched latest roster from Google Sheets.");
+} catch (error) {
+  console.warn(`Could not fetch sheet (${error.message}). Falling back to ${sourcePath}.`);
+  csv = await fs.readFile(sourcePath, "utf8");
+}
 const rows = parseCsv(csv);
 const headerIndex = rows.findIndex((cells) => cells.some((cell) => cleanText(cell).toUpperCase() === "CALLSIGN"));
 
@@ -158,13 +197,34 @@ const roster = rows
   })
   .filter((entry) => entry.callsign || entry.name || entry.activity || entry.rank);
 
+// The sheet itself carries duplicate callsigns (leftover vacant rows
+// alongside the filled one) — collapse each callsign to a single entry,
+// preferring the active/named row over vacant duplicates.
+function dedupeByCallsign(entries) {
+  const seen = new Map();
+  for (const entry of entries) {
+    if (!entry.callsign) { seen.set(entry.id, entry); continue; }
+    const existing = seen.get(entry.callsign);
+    if (!existing) { seen.set(entry.callsign, entry); continue; }
+    const existingVacant = existing.vacant || existing.activity === "Vacant" || !existing.name;
+    const thisVacant = entry.vacant || entry.activity === "Vacant" || !entry.name;
+    if (existingVacant && !thisVacant) seen.set(entry.callsign, entry);
+  }
+  return [...seen.values()];
+}
+
+const dedupedRoster = dedupeByCallsign(roster);
+if (dedupedRoster.length < roster.length) {
+  console.log(`Collapsed ${roster.length - dedupedRoster.length} duplicate-callsign row(s) from the sheet.`);
+}
+
 const payload = {
   department: cleanText(rows[1]?.find((cell) => cleanText(cell)) || "Police Department"),
   importedAt: new Date().toISOString(),
-  source: "https://docs.google.com/spreadsheets/d/1g5PBLmzfN8e0MIrcvCE4dswRjdX43onfju5OsX72u5U/edit",
+  source: `https://docs.google.com/spreadsheets/d/${parseSheetArg(sheetArg).id}/edit`,
   divisions: divisionColumns.map(({ label }) => label),
   strikes: strikeColumns.map(({ label }) => label),
-  roster
+  roster: dedupedRoster
 };
 
 await fs.mkdir(path.dirname(outputPath), { recursive: true });

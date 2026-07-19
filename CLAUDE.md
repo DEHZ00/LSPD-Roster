@@ -28,7 +28,7 @@ data/
   applications.json — join applications
   source-roster.csv — original import source
 scripts/
-  import-roster.mjs — one-time CSV → roster.json importer
+  import-roster.mjs — Google Sheets → roster.json importer
 ```
 
 ## Key facts
@@ -57,5 +57,13 @@ scripts/
 ## Data files
 
 `data/roster.json` also stores `department`, `divisions` (array), `strikes` (array), `importedAt`, `source`, `updatedAt`, `updatedBy`.
+
+## Re-importing the roster from Google Sheets
+
+`npm run import:roster` fetches the live roster sheet (CSV export, no API key needed — the sheet must stay shared as "Anyone with the link can view") and overwrites `data/roster.json` and `data/source-roster.csv`. Uses Node's built-in `fetch`, no new dependency. Duplicate callsigns in the sheet are automatically collapsed (prefers the active/named row over vacant duplicates). Falls back to the local `data/source-roster.csv` snapshot if the fetch fails (offline, sheet made private, etc).
+
+To import from a different sheet, pass its URL or ID as an argument: `node scripts/import-roster.mjs "https://docs.google.com/spreadsheets/d/.../edit#gid=..."`.
+
+Re-importing only updates the seed file — on Railway, `syncSeedImport()` in `server.js` compares `importedAt` and replaces the live volume's roster automatically on next deploy if the seed is newer.
 
 Do not add a build step, bundler, or npm packages without discussing first — the zero-dependency constraint is intentional.
