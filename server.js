@@ -93,9 +93,20 @@ function cookieValue(req, name) {
     ?.split("=")[1];
 }
 
+const MAX_BODY_BYTES = 1024 * 1024; // 1MB — generous for any form on this site
+
 async function bodyJson(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) {
+      const error = new Error("Request body too large.");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
@@ -1018,6 +1029,10 @@ const server = http.createServer(async (req, res) => {
     }
     await serveStatic(req, res);
   } catch (error) {
+    if (error.statusCode) {
+      send(res, error.statusCode, { error: error.message });
+      return;
+    }
     console.error(error);
     send(res, 500, { error: "Server error." });
   }
