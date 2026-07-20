@@ -812,25 +812,6 @@ function renderKanban() {
     });
   });
 
-  // Terminate drop zone
-  const terminateZone = $("#terminateZone");
-  terminateZone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    terminateZone.classList.add("drag-over");
-  });
-  terminateZone.addEventListener("dragleave", () => terminateZone.classList.remove("drag-over"));
-  terminateZone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    terminateZone.classList.remove("drag-over");
-    terminateZone.classList.add("hidden");
-    const cardId = e.dataTransfer.getData("text/plain");
-    const card = onboardingCards.find((c) => c.id === cardId);
-    if (!card) return;
-    pendingTerminationId = cardId;
-    $("#terminateName").textContent = card.name;
-    $("#terminateModal").classList.remove("hidden");
-  });
-
   // Drop zones
   $$(".kanban-cards").forEach((zone) => {
     zone.addEventListener("dragover", (e) => {
@@ -1032,6 +1013,27 @@ function showView(view) {
 }
 
 function wireEvents() {
+  // Terminate drop zone is a static element (unlike the kanban cards/columns,
+  // which are recreated on every renderKanban() call) — wire it once here
+  // instead of inside renderKanban(), or listeners pile up on every refresh.
+  const terminateZone = $("#terminateZone");
+  terminateZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    terminateZone.classList.add("drag-over");
+  });
+  terminateZone.addEventListener("dragleave", () => terminateZone.classList.remove("drag-over"));
+  terminateZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    terminateZone.classList.remove("drag-over");
+    terminateZone.classList.add("hidden");
+    const cardId = e.dataTransfer.getData("text/plain");
+    const card = onboardingCards.find((c) => c.id === cardId);
+    if (!card) return;
+    pendingTerminationId = cardId;
+    $("#terminateName").textContent = card.name;
+    $("#terminateModal").classList.remove("hidden");
+  });
+
   $$(".apply-tab").forEach((button) => {
     button.addEventListener("click", () => switchApplyTab(button.dataset.tab));
   });

@@ -100,10 +100,23 @@ async function bodyJson(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+// Matches the pd_session cookie's Max-Age (8h). The cookie stops being sent
+// by the browser after this, but nothing previously enforced it server-side —
+// a copied/replayed token would otherwise stay valid forever.
+const SESSION_MAX_AGE_MS = 8 * 3600 * 1000;
+
+function isSessionExpired(session) {
+  return Date.now() - session.createdAt > SESSION_MAX_AGE_MS;
+}
+
 async function currentUser(req) {
   const token = cookieValue(req, "pd_session");
   const session = token ? sessions.get(token) : null;
   if (!session) return null;
+  if (isSessionExpired(session)) {
+    sessions.delete(token);
+    return null;
+  }
   const { users } = await readJson(usersPath);
   return users.find((user) => user.id === session.userId) || null;
 }
@@ -979,10 +992,28 @@ async function restoreMissingSlots() {
   console.log(`Restored ${missing.length} missing roster slot(s) from seed.`);
 }
 
+// Every handler does read-JSON, check, mutate, write-JSON with no locking —
+// two requests racing on the same file could both read before either writes,
+// letting both pass a uniqueness check that should only let one through
+// (trivially reproducible with a fast double-click on any save button).
+// Serializing all state-changing requests through one queue closes that for
+// every handler at once instead of adding a lock per read-modify-write site.
+// GETs don't need to wait — they don't do a check-then-write.
+let writeQueue = Promise.resolve();
+function withWriteLock(fn) {
+  const run = writeQueue.then(fn, fn);
+  writeQueue = run.catch(() => {});
+  return run;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.url.startsWith("/api/")) {
-      await handleApi(req, res);
+      if (req.method === "GET") {
+        await handleApi(req, res);
+      } else {
+        await withWriteLock(() => handleApi(req, res));
+      }
       return;
     }
     await serveStatic(req, res);
@@ -991,6 +1022,15 @@ const server = http.createServer(async (req, res) => {
     send(res, 500, { error: "Server error." });
   }
 });
+
+// Lazily-expired sessions (checked on access in currentUser) cover
+// correctness; this just keeps the Map from growing forever with entries
+// for tokens that are never used again (tab closed, never came back).
+setInterval(() => {
+  for (const [token, session] of sessions) {
+    if (isSessionExpired(session)) sessions.delete(token);
+  }
+}, 60 * 60 * 1000).unref();
 
 initDataDir().then(() => {
   server.listen(port, () => {
