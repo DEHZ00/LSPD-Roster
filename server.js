@@ -1018,6 +1018,12 @@ function withWriteLock(fn) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // Every resource is self-hosted (see public/index.html), so a strict
+  // same-origin policy costs nothing here. 'unsafe-inline' on style-src
+  // covers the inline style="" attributes app.js generates.
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:");
   try {
     if (req.url.startsWith("/api/")) {
       if (req.method === "GET") {
