@@ -873,6 +873,25 @@ async function initDataDir() {
   }
   await syncSeedImport();
   await restoreMissingSlots();
+  await migratePlaintextPasswords();
+}
+
+// One-time upgrade for deployments whose users.json predates password
+// hashing (e.g. a volume seeded before this change shipped) — hash any
+// plaintext password in place on boot so those accounts can still log in.
+async function migratePlaintextPasswords() {
+  const data = await readJson(usersPath);
+  let changed = false;
+  for (const user of data.users) {
+    if (!isHashedPassword(user.password)) {
+      user.password = hashPassword(user.password);
+      changed = true;
+    }
+  }
+  if (changed) {
+    await writeJson(usersPath, data);
+    console.log("Migrated plaintext password(s) in users.json to scrypt hashes.");
+  }
 }
 
 // When a fresh roster import is shipped (seed importedAt newer than the live
