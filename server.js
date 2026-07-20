@@ -223,7 +223,7 @@ async function serveStatic(req, res) {
   const requestPath = new URL(req.url, `http://${req.headers.host}`).pathname;
   const cleanPath = requestPath === "/" ? "/index.html" : requestPath;
   const filePath = path.normalize(path.join(publicDir, cleanPath));
-  if (!filePath.startsWith(publicDir)) {
+  if (filePath !== publicDir && !filePath.startsWith(publicDir + path.sep)) {
     send(res, 403, "Forbidden");
     return;
   }
@@ -348,6 +348,11 @@ async function handleApi(req, res) {
     const callsignChanged = newCallsign && newCallsign !== currentCallsign;
 
     if (callsignChanged) {
+      const conflict = occupiedCallsignConflict(data.roster, newCallsign, id);
+      if (conflict) {
+        send(res, 409, { error: `Callsign ${newCallsign} is already assigned to ${conflict.name}.` });
+        return;
+      }
       // Find the existing slot with the target callsign and move the person there
       const targetIdx = data.roster.findIndex(
         (e, i) => i !== index && String(e.callsign || "").trim() === newCallsign
@@ -626,7 +631,12 @@ async function handleApi(req, res) {
       send(res, 404, { error: "User not found." });
       return;
     }
-    data.users[index] = sanitizeUser(payload, data.users[index]);
+    const next = sanitizeUser(payload, data.users[index]);
+    if (data.users.some((candidate) => candidate.id !== id && candidate.email === next.email)) {
+      send(res, 409, { error: "A user with that email already exists." });
+      return;
+    }
+    data.users[index] = next;
     await writeJson(usersPath, data);
     send(res, 200, publicUser(data.users[index]));
     return;
