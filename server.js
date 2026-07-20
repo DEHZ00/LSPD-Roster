@@ -160,11 +160,13 @@ function sanitizeRosterEntry(input, existing = {}) {
   const strikes = input.strikes || {};
   const divisionKeys = Object.keys({ ...(existing.divisions || {}), ...divisions });
   const strikeKeys = Object.keys({ ...(existing.strikes || {}), ...strikes });
+  const name = String(input.name || "").trim();
+  const activity = String(input.activity || "").trim();
   return {
     id: existing.id || crypto.randomUUID(),
     callsign: String(input.callsign || "").trim(),
-    name: String(input.name || "").trim(),
-    activity: String(input.activity || "").trim(),
+    name,
+    activity,
     rank: String(input.rank || "").trim(),
     divisions: Object.fromEntries(divisionKeys.map((key) => [key, Boolean(divisions[key])])),
     strikes: Object.fromEntries(strikeKeys.map((key) => [key, Boolean(strikes[key])])),
@@ -172,7 +174,10 @@ function sanitizeRosterEntry(input, existing = {}) {
     employeeNotes: String(input.employeeNotes || "").trim(),
     promotionDate: String(input.promotionDate || "").trim(),
     tig: String(input.tig || "").trim(),
-    vacant: Boolean(input.vacant),
+    // Derived from activity/name rather than trusted from the "Vacant slot"
+    // checkbox directly — a filled-in name with a stale checked box used to
+    // save fine but stay hidden everywhere "vacant" is checked.
+    vacant: activity === "Vacant" || !name,
     clearedForPatrol: Boolean(input.clearedForPatrol ?? existing.clearedForPatrol)
   };
 }
@@ -874,6 +879,27 @@ async function initDataDir() {
   await syncSeedImport();
   await restoreMissingSlots();
   await migratePlaintextPasswords();
+  await fixStaleVacantFlags();
+}
+
+// One-time cleanup for entries saved before sanitizeRosterEntry derived
+// `vacant` from activity/name: a filled-in name with a still-checked
+// "Vacant slot" box used to save fine but stay hidden by every vacant
+// filter in the app. Recompute vacant for every entry on boot.
+async function fixStaleVacantFlags() {
+  const data = await readJson(rosterPath);
+  let changed = false;
+  for (const entry of data.roster) {
+    const shouldBeVacant = entry.activity === "Vacant" || !String(entry.name || "").trim();
+    if (Boolean(entry.vacant) !== shouldBeVacant) {
+      entry.vacant = shouldBeVacant;
+      changed = true;
+    }
+  }
+  if (changed) {
+    await writeJson(rosterPath, data);
+    console.log("Fixed stale vacant flag(s) in roster.json.");
+  }
 }
 
 // One-time upgrade for deployments whose users.json predates password
