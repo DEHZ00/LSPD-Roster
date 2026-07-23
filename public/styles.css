@@ -940,6 +940,93 @@ legend {
   margin: 0;
 }
 
+/* ── Full application review modal ── */
+
+.modal-large {
+  max-height: 85vh;
+  max-width: 900px;
+  overflow-y: auto;
+}
+
+.review-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.review-field {
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+}
+
+.review-field-header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.review-field-label {
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+
+.review-field-value {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+
+.replay-btn {
+  background: transparent;
+  border: 1px solid var(--gold-dark);
+  border-radius: 4px;
+  color: var(--gold);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  text-transform: none;
+}
+
+.replay-btn:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: default;
+}
+
+.replay-display {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px dashed var(--gold-dark);
+  border-radius: 4px;
+  color: var(--ink);
+  display: none;
+  font-size: 14px;
+  line-height: 1.6;
+  margin-top: 8px;
+  min-height: 60px;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.replay-display.active {
+  display: block;
+}
+
+.replay-cursor {
+  animation: replay-blink 0.8s step-end infinite;
+}
+
+@keyframes replay-blink {
+  50% { opacity: 0; }
+}
+
 .empty-state {
   color: var(--muted);
   padding: 16px;

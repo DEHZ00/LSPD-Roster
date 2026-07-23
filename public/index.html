@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LSPD Roster</title>
     <link rel="icon" type="image/webp" href="/Lspdss.webp">
-    <link rel="stylesheet" href="/styles.css?v=6">
+    <link rel="stylesheet" href="/styles.css?v=7">
   </head>
   <body>
     <header class="topbar">
@@ -220,7 +220,10 @@
             <div class="applications-layout">
               <div class="mini-list applications" id="applicationList"></div>
               <form id="acceptApplicationForm" class="accept-form">
-                <h3 id="acceptFormTitle">Accept applicant</h3>
+                <div class="section-head">
+                  <h3 id="acceptFormTitle">Accept applicant</h3>
+                  <button type="button" id="expandReviewBtn" class="secondary hidden">Full Review ⤢</button>
+                </div>
                 <input name="applicationId" type="hidden">
                 <input name="vacantEntryId" type="hidden">
                 <label><span>Applicant</span><input name="name" disabled></label>
@@ -392,6 +395,17 @@
         </div>
       </div>
 
+      <!-- Full application review modal (bigger view + typing replay) -->
+      <div id="reviewModal" class="modal-overlay hidden">
+        <div class="modal modal-large">
+          <div class="section-head">
+            <h3 id="reviewModalTitle">Review Application</h3>
+            <button type="button" id="reviewModalCloseBtn" class="secondary">Close</button>
+          </div>
+          <div id="reviewModalBody" class="review-modal-body"></div>
+        </div>
+      </div>
+
       <section id="dashboardView" class="view hidden">
         <div id="dashboardPanel" class="dashboard">
           <div class="dashboard-head">
@@ -530,6 +544,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=14" type="module"></script>
+    <script src="/app.js?v=15" type="module"></script>
   </body>
 </html>

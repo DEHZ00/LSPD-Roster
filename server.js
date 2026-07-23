@@ -93,7 +93,7 @@ function cookieValue(req, name) {
     ?.split("=")[1];
 }
 
-const MAX_BODY_BYTES = 1024 * 1024; // 1MB — generous for any form on this site
+const MAX_BODY_BYTES = 3 * 1024 * 1024; // 3MB — generous for any form, with headroom for typing-replay snapshots
 
 async function bodyJson(req) {
   const chunks = [];
@@ -224,6 +224,29 @@ function sanitizeUser(input, existing = {}) {
 }
 
 const KNOWN_APPLICATION_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory", "clips"];
+const MAX_TYPING_SNAPSHOTS = 80;
+const MAX_TYPING_VALUE_LENGTH = 5000;
+
+// Client-reported {t, v} snapshots for the typing-replay review feature —
+// defense in depth on top of the request body size cap, since a malicious
+// client could otherwise submit an arbitrarily large structure here.
+function sanitizeTypingReplay(input) {
+  if (!input || typeof input !== "object") return {};
+  const result = {};
+  for (const field of KNOWN_APPLICATION_FIELDS) {
+    const snapshots = input[field];
+    if (!Array.isArray(snapshots)) continue;
+    const cleaned = snapshots
+      .slice(0, MAX_TYPING_SNAPSHOTS)
+      .map((s) => ({
+        t: Math.max(0, Math.min(3600000, Math.round(Number(s?.t)) || 0)),
+        v: String(s?.v || "").slice(0, MAX_TYPING_VALUE_LENGTH)
+      }))
+      .filter((s) => s.v);
+    if (cleaned.length) result[field] = cleaned;
+  }
+  return result;
+}
 
 function sanitizeApplication(input, existing = {}) {
   return {
@@ -251,7 +274,8 @@ function sanitizeApplication(input, existing = {}) {
       : existing.pastedFields || [],
     awayCount: Math.max(0, Math.min(1000, Math.round(Number(input.awayCount)) || existing.awayCount || 0)),
     awayTotalMs: Math.max(0, Math.min(86400000, Math.round(Number(input.awayTotalMs)) || existing.awayTotalMs || 0)),
-    similarityFlags: existing.similarityFlags || []
+    similarityFlags: existing.similarityFlags || [],
+    typingReplay: input.typingReplay !== undefined ? sanitizeTypingReplay(input.typingReplay) : (existing.typingReplay || {})
   };
 }
 

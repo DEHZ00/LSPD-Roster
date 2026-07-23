@@ -8,6 +8,8 @@ let sessionUser = null;
 let realSessionUser = null; // set when admin is previewing another role
 let selectedEntryId = null;
 let selectedApplicationId = null;
+let currentReviewApplication = null;
+let replayToken = 0;
 let users = [];
 let applications = [];
 let onboardingCards = [];
@@ -50,6 +52,30 @@ function resetApplicationSignals() {
   awayState = false;
   awayCount = 0;
   awayTotalMs = 0;
+  typingReplay = {};
+  typingLastRecorded = {};
+  typingStartedAt = 0;
+}
+
+// Throttled {t, v} snapshots per field, replayed later like a typing-history
+// extension. Capped both in frequency and count so a long essay doesn't
+// balloon the request — the cap means only roughly the first ~30s of active
+// typing per field gets captured, which is enough to show the pattern
+// (gradual vs. a chunk appearing all at once) without needing the whole session.
+const TYPING_THROTTLE_MS = 400;
+const TYPING_MAX_SNAPSHOTS = 80;
+let typingReplay = {};
+let typingLastRecorded = {};
+let typingStartedAt = 0;
+
+function recordTypingSnapshot(name, value) {
+  const now = Date.now();
+  if (!typingStartedAt) typingStartedAt = now;
+  const arr = typingReplay[name] || (typingReplay[name] = []);
+  if (arr.length >= TYPING_MAX_SNAPSHOTS) return;
+  if (now - (typingLastRecorded[name] || 0) < TYPING_THROTTLE_MS) return;
+  typingLastRecorded[name] = now;
+  arr.push({ t: now - typingStartedAt, v: value });
 }
 
 const onboardingStages = [
@@ -550,10 +576,69 @@ function renderApplicationSignals(application) {
   </div>`;
 }
 
+function buildReviewModalBody(application) {
+  const fields = [
+    { label: "Discord", value: application.discord },
+    { label: "IRL Age", value: application.age },
+    { label: "Faction Character", value: application.factionCharacter },
+    { label: "RP Philosophy", value: application.roleplayPhilosophy, replay: "roleplayPhilosophy" },
+    { label: "Character Description", value: application.characterDescription, replay: "characterDescription" },
+    { label: "LEO Experience", value: application.leoExperience, replay: "leoExperience" },
+    { label: "Ban History", value: application.bannedHistory, replay: "bannedHistory" },
+    { label: "Clips", value: application.clips, replay: "clips" },
+    { label: "Status", value: application.status !== "pending" ? application.status : null },
+    { label: "Rejection Reason", value: application.rejectionReason },
+    { label: "Rejection Notes", value: application.rejectionNotes }
+  ].filter((f) => f.value);
+
+  const fieldsHtml = fields.map((f) => {
+    const hasReplay = f.replay && application.typingReplay?.[f.replay]?.length;
+    return `<div class="review-field">
+      <div class="review-field-header">
+        <span class="review-field-label">${escapeHtml(f.label)}</span>
+        ${hasReplay ? `<button type="button" class="replay-btn" data-replay-field="${escapeHtml(f.replay)}">▶ Replay typing</button>` : ""}
+      </div>
+      <p class="review-field-value">${escapeHtml(f.value)}</p>
+      ${hasReplay ? `<div class="replay-display" data-replay-target="${escapeHtml(f.replay)}"></div>` : ""}
+    </div>`;
+  }).join("");
+
+  return renderApplicationSignals(application) + fieldsHtml;
+}
+
+// Replays recorded {t, v} snapshots into displayEl like a typing-history
+// extension. Delays are clamped so a long thinking-pause doesn't stall the
+// replay for the same real duration — capped between 30ms and 600ms per step.
+function playTypingReplay(snapshots, buttonEl, displayEl) {
+  const token = ++replayToken;
+  buttonEl.disabled = true;
+  buttonEl.textContent = "Replaying…";
+  displayEl.classList.add("active");
+  let i = 0;
+
+  function step() {
+    if (token !== replayToken) return; // a newer replay started elsewhere, abandon this one
+    if (i >= snapshots.length) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = "▶ Replay typing";
+      displayEl.textContent = snapshots[snapshots.length - 1].v;
+      return;
+    }
+    displayEl.innerHTML = `${escapeHtml(snapshots[i].v)}<span class="replay-cursor">▍</span>`;
+    const gap = i + 1 < snapshots.length ? snapshots[i + 1].t - snapshots[i].t : 0;
+    const delay = Math.min(600, Math.max(30, gap));
+    i += 1;
+    setTimeout(step, delay);
+  }
+  step();
+}
+
 function applicationToAcceptForm(application) {
   const form = $("#acceptApplicationForm");
   const fields = form.elements;
   selectedApplicationId = application?.id || null;
+  currentReviewApplication = application || null;
+  $("#expandReviewBtn").classList.toggle("hidden", !application);
   fields.applicationId.value = application?.id || "";
   fields.vacantEntryId.value = "";
   fields.name.value = application?.name || "";
@@ -1307,7 +1392,8 @@ function wireEvents() {
           clips: fields.clips.value,
           pastedFields: [...pastedFields],
           awayCount,
-          awayTotalMs
+          awayTotalMs,
+          typingReplay
         })
       });
       localStorage.setItem("pd_application_id", next.application.id);
@@ -1350,7 +1436,9 @@ function wireEvents() {
   $("#applicationForm").addEventListener("focusin", () => { awayTracking = true; }, { once: true });
 
   APPLICATION_ESSAY_FIELDS.forEach((name) => {
-    $("#applicationForm").elements[name]?.addEventListener("paste", () => pastedFields.add(name));
+    const field = $("#applicationForm").elements[name];
+    field?.addEventListener("paste", () => pastedFields.add(name));
+    field?.addEventListener("input", () => recordTypingSnapshot(name, field.value));
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -1640,6 +1728,29 @@ function wireEvents() {
   $("#rejectCancelBtn").addEventListener("click", () => $("#rejectModal").classList.add("hidden"));
   $("#rejectModal").addEventListener("click", (e) => {
     if (e.target === $("#rejectModal")) $("#rejectModal").classList.add("hidden");
+  });
+
+  // Full application review modal
+  $("#expandReviewBtn").addEventListener("click", () => {
+    if (!currentReviewApplication) return;
+    $("#reviewModalTitle").textContent = `Review — ${currentReviewApplication.name}`;
+    $("#reviewModalBody").innerHTML = buildReviewModalBody(currentReviewApplication);
+    $("#reviewModal").classList.remove("hidden");
+  });
+
+  $("#reviewModalCloseBtn").addEventListener("click", () => $("#reviewModal").classList.add("hidden"));
+  $("#reviewModal").addEventListener("click", (e) => {
+    if (e.target === $("#reviewModal")) $("#reviewModal").classList.add("hidden");
+  });
+
+  $("#reviewModalBody").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-replay-field]");
+    if (!btn || btn.disabled) return;
+    const field = btn.dataset.replayField;
+    const snapshots = currentReviewApplication?.typingReplay?.[field];
+    const displayEl = $(`.replay-display[data-replay-target="${field}"]`);
+    if (!snapshots?.length || !displayEl) return;
+    playTypingReplay(snapshots, btn, displayEl);
   });
 
   $("#rejectForm").addEventListener("submit", async (e) => {
