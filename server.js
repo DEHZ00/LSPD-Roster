@@ -223,6 +223,8 @@ function sanitizeUser(input, existing = {}) {
   };
 }
 
+const KNOWN_APPLICATION_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory", "clips"];
+
 function sanitizeApplication(input, existing = {}) {
   return {
     id: existing.id || crypto.randomUUID(),
@@ -239,8 +241,72 @@ function sanitizeApplication(input, existing = {}) {
     submittedAt: existing.submittedAt || new Date().toISOString(),
     reviewedAt: input.reviewedAt || existing.reviewedAt || "",
     reviewedBy: input.reviewedBy || existing.reviewedBy || "",
-    rosterEntryId: input.rosterEntryId || existing.rosterEntryId || ""
+    rosterEntryId: input.rosterEntryId || existing.rosterEntryId || "",
+    // Review signals for staff, not the applicant — pastedFields/away* come
+    // from the client at submission time (best-effort, informational only);
+    // similarityFlags is computed server-side in the submit handler and is
+    // never trusted from client input, only carried forward via `existing`.
+    pastedFields: Array.isArray(input.pastedFields)
+      ? input.pastedFields.filter((f) => KNOWN_APPLICATION_FIELDS.includes(f))
+      : existing.pastedFields || [],
+    awayCount: Math.max(0, Math.min(1000, Math.round(Number(input.awayCount)) || existing.awayCount || 0)),
+    awayTotalMs: Math.max(0, Math.min(86400000, Math.round(Number(input.awayTotalMs)) || existing.awayTotalMs || 0)),
+    similarityFlags: existing.similarityFlags || []
   };
+}
+
+function normalizeForCompare(text) {
+  return String(text || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function shingleSet(text, n = 5) {
+  const words = normalizeForCompare(text).split(" ").filter(Boolean);
+  const set = new Set();
+  if (words.length < n) {
+    if (words.length) set.add(words.join(" "));
+    return set;
+  }
+  for (let i = 0; i <= words.length - n; i++) {
+    set.add(words.slice(i, i + n).join(" "));
+  }
+  return set;
+}
+
+function jaccardSimilarity(setA, setB) {
+  if (!setA.size || !setB.size) return 0;
+  let intersection = 0;
+  for (const item of setA) {
+    if (setB.has(item)) intersection++;
+  }
+  return intersection / (setA.size + setB.size - intersection);
+}
+
+const SIMILARITY_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory"];
+const SIMILARITY_THRESHOLD = 0.5;
+const MIN_WORDS_FOR_SIMILARITY = 25;
+
+// Flags near-duplicate essay answers against prior applications (a template
+// or AI answer circulating in the community, or the same person reapplying
+// with unchanged text) — a signal for reviewers, not an automatic rejection.
+function findSimilarApplications(candidate, existingApplications) {
+  const flags = [];
+  for (const field of SIMILARITY_FIELDS) {
+    const words = normalizeForCompare(candidate[field]).split(" ").filter(Boolean);
+    if (words.length < MIN_WORDS_FOR_SIMILARITY) continue;
+    const candidateShingles = shingleSet(candidate[field]);
+    let best = null;
+    for (const other of existingApplications) {
+      if (!other[field]) continue;
+      const otherWords = normalizeForCompare(other[field]).split(" ").filter(Boolean);
+      if (otherWords.length < MIN_WORDS_FOR_SIMILARITY) continue;
+      const similarity = jaccardSimilarity(candidateShingles, shingleSet(other[field]));
+      if (similarity >= SIMILARITY_THRESHOLD && (!best || similarity > best.similarity)) {
+        best = { field, similarity, applicationId: other.id, applicantName: other.name };
+      }
+    }
+    if (best) flags.push(best);
+  }
+  return flags;
 }
 
 async function serveStatic(req, res) {
@@ -301,6 +367,7 @@ async function handleApi(req, res) {
     }
 
     const data = await readJson(applicationsPath);
+    next.similarityFlags = findSimilarApplications(next, data.applications);
     data.applications.unshift(next);
     await writeJson(applicationsPath, data);
 

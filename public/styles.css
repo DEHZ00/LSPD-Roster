@@ -919,6 +919,21 @@ legend {
   white-space: pre-wrap;
 }
 
+.app-detail-signals {
+  border-left-color: var(--red);
+}
+
+.app-detail-signals .app-detail-label {
+  color: var(--red);
+}
+
+.app-disclosure {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+}
+
 .app-detail-empty {
   color: var(--muted);
   font-size: 13px;

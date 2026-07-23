@@ -18,6 +18,40 @@ let promoteEntryId = null;
 let activeCategoryFilter = "";
 let entryListQuery = "";
 
+// ── Application review signals ──
+// Best-effort, informational-only signals for staff reviewing applications —
+// none of this blocks submission or proves AI use, it just gives reviewers
+// something to weigh. Browsers can't reveal what other tab/site a user went
+// to, only that focus was lost and for how long.
+const APPLICATION_ESSAY_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory", "clips"];
+let pastedFields = new Set();
+let awayTracking = false;
+let awayState = false;
+let awayStartedAt = 0;
+let awayCount = 0;
+let awayTotalMs = 0;
+
+function markAway() {
+  if (!awayTracking || awayState) return;
+  awayState = true;
+  awayStartedAt = Date.now();
+  awayCount += 1;
+}
+
+function markBack() {
+  if (!awayTracking || !awayState) return;
+  awayState = false;
+  awayTotalMs += Date.now() - awayStartedAt;
+}
+
+function resetApplicationSignals() {
+  pastedFields = new Set();
+  awayTracking = false;
+  awayState = false;
+  awayCount = 0;
+  awayTotalMs = 0;
+}
+
 const onboardingStages = [
   "Application Pending",
   "Application Accepted",
@@ -488,6 +522,34 @@ function populateAcceptCallsigns(rank) {
   picker.disabled = false;
 }
 
+function formatDuration(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return m ? `${m}m ${s}s` : `${s}s`;
+}
+
+// Informational only — none of this proves AI use or auto-rejects anything,
+// it's just context for a human reviewer to weigh.
+function renderApplicationSignals(application) {
+  const signals = [];
+  if (application.pastedFields?.length) {
+    signals.push(`Pasted into: ${application.pastedFields.map(escapeHtml).join(", ")}`);
+  }
+  if (application.awayCount) {
+    const times = application.awayCount === 1 ? "time" : "times";
+    signals.push(`Left the tab ${application.awayCount} ${times} while applying (${formatDuration(application.awayTotalMs || 0)} total away)`);
+  }
+  (application.similarityFlags || []).forEach((flag) => {
+    signals.push(`⚠ ${Math.round(flag.similarity * 100)}% text match with ${escapeHtml(flag.applicantName || "another applicant")}'s application (${escapeHtml(flag.field)})`);
+  });
+  if (!signals.length) return "";
+  return `<div class="app-detail-field app-detail-signals">
+    <span class="app-detail-label">Review Signals</span>
+    ${signals.map((s) => `<p class="app-detail-value">${s}</p>`).join("")}
+  </div>`;
+}
+
 function applicationToAcceptForm(application) {
   const form = $("#acceptApplicationForm");
   const fields = form.elements;
@@ -513,7 +575,7 @@ function applicationToAcceptForm(application) {
     { label: "Rejection Notes",    value: application?.rejectionNotes },
   ].filter((f) => f.value);
   $("#applicationDetail").innerHTML = application
-    ? appFields.map((f) =>
+    ? renderApplicationSignals(application) + appFields.map((f) =>
         `<div class="app-detail-field">
           <span class="app-detail-label">${escapeHtml(f.label)}</span>
           <p class="app-detail-value">${escapeHtml(String(f.value))}</p>
@@ -1201,6 +1263,7 @@ function wireEvents() {
     localStorage.removeItem("pd_application_id");
     $("#applicationStatusPanel").classList.add("hidden");
     $("#noApplicationMessage").classList.remove("hidden");
+    resetApplicationSignals();
     switchApplyTab("apply");
   });
 
@@ -1241,12 +1304,16 @@ function wireEvents() {
           characterDescription: fields.characterDescription.value,
           leoExperience: fields.leoExperience.value,
           bannedHistory: fields.bannedHistory.value,
-          clips: fields.clips.value
+          clips: fields.clips.value,
+          pastedFields: [...pastedFields],
+          awayCount,
+          awayTotalMs
         })
       });
       localStorage.setItem("pd_application_id", next.application.id);
       form.reset();
       updateSubmitState();
+      resetApplicationSignals();
       showApplicationStatus(next.application);
       if (sessionUser?.canEditRoster || sessionUser?.canOnboard) await loadApplications();
       toast("Application submitted.");
@@ -1277,6 +1344,20 @@ function wireEvents() {
     $("#applicationForm").elements[name].addEventListener("change", updateSubmitState);
   });
   updateSubmitState();
+
+  // Start tracking tab-switches only once someone actually starts the
+  // application, so browsing the rest of the site beforehand doesn't count.
+  $("#applicationForm").addEventListener("focusin", () => { awayTracking = true; }, { once: true });
+
+  APPLICATION_ESSAY_FIELDS.forEach((name) => {
+    $("#applicationForm").elements[name]?.addEventListener("paste", () => pastedFields.add(name));
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) markAway(); else markBack();
+  });
+  window.addEventListener("blur", markAway);
+  window.addEventListener("focus", markBack);
 
   ["searchInput", "activityFilter", "rankFilter"].forEach((id) => {
     $(`#${id}`).addEventListener("input", () => {
