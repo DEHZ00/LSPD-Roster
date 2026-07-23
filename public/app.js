@@ -58,11 +58,15 @@ function resetApplicationSignals() {
 }
 
 // Throttled {t, v} snapshots per field, replayed later like a typing-history
-// extension. Capped both in frequency and count so a long essay doesn't
-// balloon the request — the cap means only roughly the first ~30s of active
-// typing per field gets captured, which is enough to show the pattern
-// (gradual vs. a chunk appearing all at once) without needing the whole session.
-const TYPING_THROTTLE_MS = 400;
+// extension. Fixed-interval throttling would cap out after ~30s of
+// continuous typing (80 snapshots x 400ms) and cut a longer essay off
+// mid-sentence in the replay. Instead the required gap between snapshots
+// grows with each one recorded (dense at first, spreading out later), so 80
+// snapshots stretch to cover a realistic several-minute writing session —
+// and finalizeTypingSnapshot() guarantees the last one always matches what
+// was actually submitted, even past the cap.
+const TYPING_BASE_THROTTLE_MS = 350;
+const TYPING_THROTTLE_GROWTH = 1.06;
 const TYPING_MAX_SNAPSHOTS = 80;
 let typingReplay = {};
 let typingLastRecorded = {};
@@ -73,9 +77,26 @@ function recordTypingSnapshot(name, value) {
   if (!typingStartedAt) typingStartedAt = now;
   const arr = typingReplay[name] || (typingReplay[name] = []);
   if (arr.length >= TYPING_MAX_SNAPSHOTS) return;
-  if (now - (typingLastRecorded[name] || 0) < TYPING_THROTTLE_MS) return;
+  const requiredGap = TYPING_BASE_THROTTLE_MS * (TYPING_THROTTLE_GROWTH ** arr.length);
+  if (now - (typingLastRecorded[name] || 0) < requiredGap) return;
   typingLastRecorded[name] = now;
   arr.push({ t: now - typingStartedAt, v: value });
+}
+
+// Called per essay field right before submitting — makes sure the replay's
+// last frame always matches the real submitted answer, overwriting the
+// final slot instead of appending once the cap is already reached.
+function finalizeTypingSnapshot(name, value) {
+  const arr = typingReplay[name];
+  if (!arr || !arr.length || !value) return;
+  const last = arr[arr.length - 1];
+  if (last.v === value) return;
+  const t = Date.now() - typingStartedAt;
+  if (arr.length >= TYPING_MAX_SNAPSHOTS) {
+    arr[arr.length - 1] = { t, v: value };
+  } else {
+    arr.push({ t, v: value });
+  }
 }
 
 const onboardingStages = [
@@ -1377,6 +1398,7 @@ function wireEvents() {
     if (submitBtn.disabled) return;
     submitBtn.disabled = true;
     submitBtn.textContent = "Submitting…";
+    APPLICATION_ESSAY_FIELDS.forEach((name) => finalizeTypingSnapshot(name, fields[name].value));
     try {
       const next = await api("/api/applications", {
         method: "POST",

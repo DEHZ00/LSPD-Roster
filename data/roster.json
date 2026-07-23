@@ -1,6 +1,6 @@
 {
   "department": "Los Santos Police Department",
-  "importedAt": "2026-07-23T07:55:46.116Z",
+  "importedAt": "2026-07-23T08:10:14.873Z",
   "source": "https://docs.google.com/spreadsheets/d/1g5PBLmzfN8e0MIrcvCE4dswRjdX43onfju5OsX72u5U/edit",
   "divisions": [
     "Canine",
@@ -90,7 +90,7 @@
       "notes": "discord: Cornwood",
       "promotionDate": "01/11/2026",
       "tig": "193",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "104-4",
@@ -115,7 +115,7 @@
       "notes": "discord: menzaro",
       "promotionDate": "08/06/2025",
       "tig": "351",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "105-5",
@@ -240,7 +240,7 @@
       "notes": "",
       "promotionDate": "04/03/2026",
       "tig": "111",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "slot-10",
@@ -465,7 +465,7 @@
       "notes": "",
       "promotionDate": "06/01/2026",
       "tig": "52",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "212-19",
@@ -640,7 +640,7 @@
       "notes": "",
       "promotionDate": "",
       "tig": "",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "219-27",
@@ -665,7 +665,7 @@
       "notes": "ot_neo",
       "promotionDate": "05/30/2026",
       "tig": "54",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "220-28",
@@ -865,7 +865,7 @@
       "notes": "clixyyisback",
       "promotionDate": "06/04/2026",
       "tig": "49",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "320-36",
@@ -5615,7 +5615,7 @@
       "notes": "",
       "promotionDate": "",
       "tig": "46226",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "626-242",
@@ -5690,7 +5690,7 @@
       "notes": "",
       "promotionDate": "",
       "tig": "46226",
-      "vacant": false
+      "vacant": true
     },
     {
       "id": "629-245",
