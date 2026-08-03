@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LSPD Roster</title>
     <link rel="icon" type="image/webp" href="/Lspdss.webp">
-    <link rel="stylesheet" href="/styles.css?v=7">
+    <link rel="stylesheet" href="/styles.css?v=8">
   </head>
   <body>
     <header class="topbar">
@@ -215,7 +215,13 @@
                 <p class="eyebrow">Application Inbox</p>
                 <h3>Department applications</h3>
               </div>
-              <button id="refreshApplicationsButton" type="button" class="secondary">Refresh</button>
+              <div class="button-row">
+                <label class="checkbox toolbar-checkbox">
+                  <input type="checkbox" id="showArchivedToggle">
+                  <span>Show archived <span id="archivedCountLabel"></span></span>
+                </label>
+                <button id="refreshApplicationsButton" type="button" class="secondary">Refresh</button>
+              </div>
             </div>
             <div class="applications-layout">
               <div class="mini-list applications" id="applicationList"></div>
@@ -400,9 +406,26 @@
         <div class="modal modal-large">
           <div class="section-head">
             <h3 id="reviewModalTitle">Review Application</h3>
-            <button type="button" id="reviewModalCloseBtn" class="secondary">Close</button>
+            <div class="button-row">
+              <button type="button" id="archiveApplicationBtn" class="secondary hidden">Archive</button>
+              <button type="button" id="deleteApplicationBtn" class="danger hidden">Delete</button>
+              <button type="button" id="reviewModalCloseBtn" class="secondary">Close</button>
+            </div>
           </div>
           <div id="reviewModalBody" class="review-modal-body"></div>
+        </div>
+      </div>
+
+      <!-- Permanent application deletion confirmation -->
+      <div id="deleteApplicationModal" class="modal-overlay hidden">
+        <div class="modal">
+          <h3>Delete Application</h3>
+          <p>Permanently delete <strong id="deleteApplicationName"></strong>'s application?</p>
+          <p class="notice">This erases the application, its typing replay, notes, and history. It cannot be undone — archive it instead if you just want it out of the inbox.</p>
+          <div class="button-row">
+            <button id="deleteApplicationConfirmBtn" class="danger">Yes, Delete Permanently</button>
+            <button id="deleteApplicationCancelBtn" class="secondary">Cancel</button>
+          </div>
         </div>
       </div>
 
@@ -544,6 +567,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=16" type="module"></script>
+    <script src="/app.js?v=17" type="module"></script>
   </body>
 </html>

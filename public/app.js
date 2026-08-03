@@ -9,7 +9,8 @@ let realSessionUser = null; // set when admin is previewing another role
 let selectedEntryId = null;
 let selectedApplicationId = null;
 let currentReviewApplication = null;
-let replayToken = 0;
+let currentReviewReplay = {};
+let showArchivedApplications = false;
 let users = [];
 let applications = [];
 let onboardingCards = [];
@@ -27,11 +28,13 @@ let entryListQuery = "";
 // to, only that focus was lost and for how long.
 const APPLICATION_ESSAY_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory", "clips"];
 let pastedFields = new Set();
+let pasteSamples = {};
 let awayTracking = false;
 let awayState = false;
 let awayStartedAt = 0;
 let awayCount = 0;
 let awayTotalMs = 0;
+let formStartedAt = 0;
 
 function markAway() {
   if (!awayTracking || awayState) return;
@@ -46,31 +49,64 @@ function markBack() {
   awayTotalMs += Date.now() - awayStartedAt;
 }
 
+// First 200 chars of whatever was pasted, so reviewers can tell a pasted
+// link from a pasted essay.
+function recordPasteSample(name, text) {
+  pastedFields.add(name);
+  const clean = String(text || "").trim();
+  if (!clean) return;
+  const list = pasteSamples[name] || (pasteSamples[name] = []);
+  if (list.length >= 10) return;
+  list.push(clean.slice(0, 200));
+}
+
 function resetApplicationSignals() {
   pastedFields = new Set();
+  pasteSamples = {};
   awayTracking = false;
   awayState = false;
   awayCount = 0;
   awayTotalMs = 0;
+  formStartedAt = 0;
   typingReplay = {};
   typingLastRecorded = {};
+  typingLastValue = {};
   typingStartedAt = 0;
 }
 
-// Throttled {t, v} snapshots per field, replayed later like a typing-history
+// Throttled snapshots per field, replayed later like a typing-history
 // extension. Fixed-interval throttling would cap out after ~30s of
-// continuous typing (80 snapshots x 400ms) and cut a longer essay off
-// mid-sentence in the replay. Instead the required gap between snapshots
-// grows with each one recorded (dense at first, spreading out later), so 80
-// snapshots stretch to cover a realistic several-minute writing session —
-// and finalizeTypingSnapshot() guarantees the last one always matches what
-// was actually submitted, even past the cap.
+// continuous typing and cut a longer essay off mid-sentence, so the required
+// gap grows with each snapshot recorded (dense at first, spreading out
+// later) to cover a realistic ~10 minute writing session.
+//
+// Snapshots are delta-encoded as {t, k, s}: k = chars shared with the
+// previous value, s = the rest. Typing mostly appends, so this stores about
+// one copy of the essay in total rather than a full copy at every step.
 const TYPING_BASE_THROTTLE_MS = 350;
 const TYPING_THROTTLE_GROWTH = 1.06;
-const TYPING_MAX_SNAPSHOTS = 80;
+const TYPING_MAX_SNAPSHOTS = 120;
 let typingReplay = {};
 let typingLastRecorded = {};
+let typingLastValue = {};
 let typingStartedAt = 0;
+
+function commonPrefixLength(a, b) {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[i] === b[i]) i += 1;
+  return i;
+}
+
+function pushTypingSnapshot(name, value, overwriteLast = false) {
+  const arr = typingReplay[name] || (typingReplay[name] = []);
+  const previous = typingLastValue[name] || "";
+  const k = commonPrefixLength(previous, value);
+  const snapshot = { t: Date.now() - typingStartedAt, k, s: value.slice(k) };
+  if (overwriteLast && arr.length) arr[arr.length - 1] = snapshot;
+  else arr.push(snapshot);
+  typingLastValue[name] = value;
+}
 
 function recordTypingSnapshot(name, value) {
   const now = Date.now();
@@ -80,7 +116,7 @@ function recordTypingSnapshot(name, value) {
   const requiredGap = TYPING_BASE_THROTTLE_MS * (TYPING_THROTTLE_GROWTH ** arr.length);
   if (now - (typingLastRecorded[name] || 0) < requiredGap) return;
   typingLastRecorded[name] = now;
-  arr.push({ t: now - typingStartedAt, v: value });
+  pushTypingSnapshot(name, value);
 }
 
 // Called per essay field right before submitting — makes sure the replay's
@@ -89,14 +125,19 @@ function recordTypingSnapshot(name, value) {
 function finalizeTypingSnapshot(name, value) {
   const arr = typingReplay[name];
   if (!arr || !arr.length || !value) return;
-  const last = arr[arr.length - 1];
-  if (last.v === value) return;
-  const t = Date.now() - typingStartedAt;
-  if (arr.length >= TYPING_MAX_SNAPSHOTS) {
-    arr[arr.length - 1] = { t, v: value };
-  } else {
-    arr.push({ t, v: value });
+  if ((typingLastValue[name] || "") === value) return;
+  pushTypingSnapshot(name, value, arr.length >= TYPING_MAX_SNAPSHOTS);
+}
+
+// Mirror of the server-side decoder — rebuilds full text at each step.
+function decodeTypingSnapshots(snapshots) {
+  const values = [];
+  let previous = "";
+  for (const snap of snapshots) {
+    previous = previous.slice(0, Math.min(snap.k, previous.length)) + snap.s;
+    values.push({ t: snap.t, v: previous });
   }
+  return values;
 }
 
 const onboardingStages = [
@@ -377,21 +418,26 @@ function renderAll() {
 }
 
 function renderApplications() {
-  const sorted = [...applications].sort((a, b) => {
+  const visible = applications.filter((a) => showArchivedApplications || !a.archived);
+  const sorted = visible.sort((a, b) => {
     const order = { pending: 0, accepted: 1, rejected: 2 };
     return (order[a.status] ?? 9) - (order[b.status] ?? 9) || String(b.submittedAt).localeCompare(String(a.submittedAt));
   });
+  const archivedCount = applications.filter((a) => a.archived).length;
+  const archivedLabel = $("#archivedCountLabel");
+  if (archivedLabel) archivedLabel.textContent = archivedCount ? `(${archivedCount})` : "";
+
   $("#applicationList").innerHTML = sorted.length
     ? sorted
         .map(
           (application) => `<button class="mini-item application-item ${application.id === selectedApplicationId ? "active" : ""}" data-application-id="${application.id}">
-            <span><strong>${escapeHtml(application.name)}</strong><br><small>${escapeHtml(application.discord)}</small></span>
+            <span><strong>${escapeHtml(application.name)}</strong>${application.archived ? ` <span class="archived-tag">archived</span>` : ""}<br><small>${escapeHtml(application.discord)}</small></span>
             <small>${escapeHtml(formatDate(application.submittedAt))}</small>
             <small class="${statusClass(application.status)}">${escapeHtml(application.status)}</small>
           </button>`
         )
         .join("")
-    : `<div class="empty-state">No applications yet.</div>`;
+    : `<div class="empty-state">${showArchivedApplications ? "No applications yet." : "No active applications."}</div>`;
 }
 
 function toDateInputValue(dateStr) {
@@ -576,28 +622,86 @@ function formatDuration(ms) {
   return m ? `${m}m ${s}s` : `${s}s`;
 }
 
+const FIELD_LABELS = {
+  roleplayPhilosophy: "RP Philosophy",
+  characterDescription: "Character Description",
+  leoExperience: "LEO Experience",
+  bannedHistory: "Ban History",
+  clips: "Clips"
+};
+
+// Chars appearing at once beyond what anyone types in a single interval —
+// mirrors BURST_CHARS_THRESHOLD on the server.
+const BURST_CHARS_THRESHOLD = 120;
+
 // Informational only — none of this proves AI use or auto-rejects anything,
 // it's just context for a human reviewer to weigh.
-function renderApplicationSignals(application) {
+function collectApplicationSignals(application) {
   const signals = [];
+
   if (application.pastedFields?.length) {
-    signals.push(`Pasted into: ${application.pastedFields.map(escapeHtml).join(", ")}`);
+    const labels = application.pastedFields.map((f) => FIELD_LABELS[f] || f);
+    signals.push({ text: `Pasted into: ${labels.join(", ")}` });
   }
+
+  Object.entries(application.pasteSamples || {}).forEach(([field, samples]) => {
+    samples.forEach((sample) => {
+      signals.push({ text: `Pasted into ${FIELD_LABELS[field] || field}: "${sample}${sample.length >= 200 ? "…" : ""}"`, muted: true });
+    });
+  });
+
+  Object.entries(application.typingStats || {}).forEach(([field, stats]) => {
+    const label = FIELD_LABELS[field] || field;
+    if (stats.maxJumpChars >= BURST_CHARS_THRESHOLD) {
+      signals.push({ text: `⚠ ${label}: ${stats.maxJumpChars} chars appeared at once (~${stats.maxJumpCps}/sec) — faster than typing`, warn: true });
+    }
+    if (stats.revisions === 0 && stats.finalLength > 200) {
+      signals.push({ text: `⚠ ${label}: no edits or backspacing — text only ever grew`, warn: true });
+    }
+  });
+
+  if (application.durationMs) {
+    const chars = Object.values(application.typingStats || {}).reduce((sum, s) => sum + (s.finalLength || 0), 0);
+    const rate = chars && application.durationMs ? Math.round(chars / (application.durationMs / 60000)) : 0;
+    signals.push({ text: `Completed in ${formatDuration(application.durationMs)}${rate ? ` (~${rate} chars/min overall)` : ""}` });
+  }
+
   if (application.awayCount) {
     const times = application.awayCount === 1 ? "time" : "times";
-    signals.push(`Left the tab ${application.awayCount} ${times} while applying (${formatDuration(application.awayTotalMs || 0)} total away)`);
+    signals.push({ text: `Left the tab ${application.awayCount} ${times} while applying (${formatDuration(application.awayTotalMs || 0)} total away)` });
   }
+
   (application.similarityFlags || []).forEach((flag) => {
-    signals.push(`⚠ ${Math.round(flag.similarity * 100)}% text match with ${escapeHtml(flag.applicantName || "another applicant")}'s application (${escapeHtml(flag.field)})`);
+    signals.push({
+      text: `⚠ ${Math.round(flag.similarity * 100)}% text match with ${flag.applicantName || "another applicant"}'s application (${FIELD_LABELS[flag.field] || flag.field})`,
+      warn: true,
+      compare: flag
+    });
   });
+
+  return signals;
+}
+
+function renderApplicationSignals(application) {
+  const signals = collectApplicationSignals(application);
   if (!signals.length) return "";
   return `<div class="app-detail-field app-detail-signals">
     <span class="app-detail-label">Review Signals</span>
-    ${signals.map((s) => `<p class="app-detail-value">${s}</p>`).join("")}
+    ${signals.map((s) => `<p class="app-detail-value">${escapeHtml(s.text)}</p>`).join("")}
   </div>`;
 }
 
-function buildReviewModalBody(application) {
+function buildReviewModalBody(application, replay) {
+  const signals = collectApplicationSignals(application);
+  const signalsHtml = signals.length
+    ? `<div class="review-field app-detail-signals">
+        <span class="review-field-label">Review Signals</span>
+        ${signals.map((s) => `<p class="review-signal${s.warn ? " review-signal-warn" : ""}${s.muted ? " review-signal-muted" : ""}">${escapeHtml(s.text)}${
+          s.compare ? ` <button type="button" class="replay-btn" data-compare-id="${escapeHtml(s.compare.applicationId)}" data-compare-field="${escapeHtml(s.compare.field)}">Compare side-by-side</button>` : ""
+        }</p>`).join("")}
+      </div>`
+    : "";
+
   const fields = [
     { label: "Discord", value: application.discord },
     { label: "IRL Age", value: application.age },
@@ -613,45 +717,220 @@ function buildReviewModalBody(application) {
   ].filter((f) => f.value);
 
   const fieldsHtml = fields.map((f) => {
-    const hasReplay = f.replay && application.typingReplay?.[f.replay]?.length;
+    const snapshots = f.replay && replay?.[f.replay];
+    const hasReplay = Array.isArray(snapshots) && snapshots.length > 1;
     return `<div class="review-field">
       <div class="review-field-header">
         <span class="review-field-label">${escapeHtml(f.label)}</span>
-        ${hasReplay ? `<button type="button" class="replay-btn" data-replay-field="${escapeHtml(f.replay)}">▶ Replay typing</button>` : ""}
+        ${hasReplay ? `<div class="replay-controls">
+          <button type="button" class="replay-btn" data-replay-field="${escapeHtml(f.replay)}">▶ Replay</button>
+          <select class="replay-speed" data-replay-speed="${escapeHtml(f.replay)}">
+            <option value="1">1×</option>
+            <option value="4" selected>4×</option>
+            <option value="16">16×</option>
+            <option value="0">Instant</option>
+          </select>
+          <input type="range" class="replay-scrub" data-replay-scrub="${escapeHtml(f.replay)}" min="0" max="${snapshots.length - 1}" value="${snapshots.length - 1}">
+        </div>` : ""}
       </div>
       <p class="review-field-value">${escapeHtml(f.value)}</p>
       ${hasReplay ? `<div class="replay-display" data-replay-target="${escapeHtml(f.replay)}"></div>` : ""}
     </div>`;
   }).join("");
 
-  return renderApplicationSignals(application) + fieldsHtml;
+  return signalsHtml + fieldsHtml + renderNotesSection(application) + renderAuditSection(application);
 }
 
-// Replays recorded {t, v} snapshots into displayEl like a typing-history
-// extension. Delays are clamped so a long thinking-pause doesn't stall the
-// replay for the same real duration — capped between 30ms and 600ms per step.
-function playTypingReplay(snapshots, buttonEl, displayEl) {
-  const token = ++replayToken;
-  buttonEl.disabled = true;
-  buttonEl.textContent = "Replaying…";
-  displayEl.classList.add("active");
-  let i = 0;
+function renderNotesSection(application) {
+  const notes = application.notes || [];
+  const list = notes.length
+    ? notes.map((n) => `<div class="note-item">
+        <div class="note-meta">${escapeHtml(n.author || n.authorEmail || "Unknown")} · ${escapeHtml(formatDateTime(n.createdAt))}</div>
+        <div class="note-text">${escapeHtml(n.text)}</div>
+      </div>`).join("")
+    : `<p class="review-signal review-signal-muted">No notes yet.</p>`;
+  return `<div class="review-field">
+    <span class="review-field-label">Reviewer Notes (internal)</span>
+    <div class="note-list">${list}</div>
+    <div class="note-compose">
+      <textarea id="noteInput" rows="2" placeholder="Add an internal note for other reviewers…"></textarea>
+      <button type="button" id="addNoteBtn">Add note</button>
+    </div>
+  </div>`;
+}
+
+function renderAuditSection(application) {
+  const log = application.auditLog || [];
+  if (!log.length) return "";
+  return `<div class="review-field">
+    <span class="review-field-label">History</span>
+    ${log.map((e) => `<p class="review-signal review-signal-muted">${escapeHtml(formatDateTime(e.at))} — ${escapeHtml(e.action)} by ${escapeHtml(e.by)}</p>`).join("")}
+  </div>`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+// ── Typing replay engine ──
+// One replay runs at a time; starting another cancels the previous. Delays
+// are clamped so a long thinking-pause doesn't stall playback for the same
+// real duration, then divided by the chosen speed.
+const replayControllers = new Map();
+
+function stopAllReplays() {
+  replayControllers.forEach((controller) => clearTimeout(controller.timer));
+  replayControllers.clear();
+}
+
+function renderReplayFrame(field, index) {
+  const values = currentReviewReplay[field];
+  const display = document.querySelector(`[data-replay-target="${CSS.escape(field)}"]`);
+  const scrub = document.querySelector(`[data-replay-scrub="${CSS.escape(field)}"]`);
+  if (!display || !values) return;
+  display.classList.add("active");
+  const clamped = Math.max(0, Math.min(index, values.length - 1));
+  display.innerHTML = `${escapeHtml(values[clamped].v)}<span class="replay-cursor">▍</span>`;
+  if (scrub) scrub.value = String(clamped);
+}
+
+function playTypingReplay(field, startIndex = 0) {
+  const values = currentReviewReplay[field];
+  if (!values || values.length < 2) return;
+  stopAllReplays();
+
+  const button = document.querySelector(`[data-replay-field="${CSS.escape(field)}"]`);
+  const speedEl = document.querySelector(`[data-replay-speed="${CSS.escape(field)}"]`);
+  const speed = Number(speedEl?.value ?? 4);
+  const controller = { timer: null, index: startIndex >= values.length - 1 ? 0 : startIndex };
+  replayControllers.set(field, controller);
+  if (button) button.textContent = "⏸ Pause";
+
+  // Instant mode: jump straight to the end, no animation.
+  if (speed === 0) {
+    renderReplayFrame(field, values.length - 1);
+    finishReplay(field);
+    return;
+  }
 
   function step() {
-    if (token !== replayToken) return; // a newer replay started elsewhere, abandon this one
-    if (i >= snapshots.length) {
-      buttonEl.disabled = false;
-      buttonEl.textContent = "▶ Replay typing";
-      displayEl.textContent = snapshots[snapshots.length - 1].v;
+    renderReplayFrame(field, controller.index);
+    if (controller.index >= values.length - 1) {
+      finishReplay(field);
       return;
     }
-    displayEl.innerHTML = `${escapeHtml(snapshots[i].v)}<span class="replay-cursor">▍</span>`;
-    const gap = i + 1 < snapshots.length ? snapshots[i + 1].t - snapshots[i].t : 0;
-    const delay = Math.min(600, Math.max(30, gap));
-    i += 1;
-    setTimeout(step, delay);
+    const gap = values[controller.index + 1].t - values[controller.index].t;
+    const delay = Math.min(600, Math.max(30, gap)) / speed;
+    controller.index += 1;
+    controller.timer = setTimeout(step, delay);
   }
   step();
+}
+
+function finishReplay(field) {
+  const controller = replayControllers.get(field);
+  if (controller) clearTimeout(controller.timer);
+  replayControllers.delete(field);
+  const button = document.querySelector(`[data-replay-field="${CSS.escape(field)}"]`);
+  if (button) button.textContent = "▶ Replay";
+}
+
+// ── Side-by-side comparison ──
+// Highlights the words that are part of any shared 5-word run between the
+// two answers, so a reported similarity percentage can be eyeballed rather
+// than taken on trust.
+function normalizeToken(token) {
+  return token.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function sharedWordFlags(tokensA, tokensB, n = 5) {
+  const normA = tokensA.map(normalizeToken);
+  const normB = tokensB.map(normalizeToken);
+  const shingles = new Set();
+  for (let i = 0; i + n <= normB.length; i += 1) {
+    shingles.add(normB.slice(i, i + n).join(" "));
+  }
+  const flags = new Array(tokensA.length).fill(false);
+  for (let i = 0; i + n <= normA.length; i += 1) {
+    if (shingles.has(normA.slice(i, i + n).join(" "))) {
+      for (let j = i; j < i + n; j += 1) flags[j] = true;
+    }
+  }
+  return flags;
+}
+
+function renderHighlighted(text, otherText) {
+  const tokens = String(text || "").split(/(\s+)/);
+  const words = tokens.filter((t) => !/^\s*$/.test(t));
+  const otherWords = String(otherText || "").split(/\s+/).filter(Boolean);
+  const flags = sharedWordFlags(words, otherWords);
+  let wordIndex = 0;
+  return tokens.map((token) => {
+    if (/^\s*$/.test(token)) return escapeHtml(token);
+    const marked = flags[wordIndex];
+    wordIndex += 1;
+    return marked ? `<mark>${escapeHtml(token)}</mark>` : escapeHtml(token);
+  }).join("");
+}
+
+// Replay data is fetched per-application on demand rather than shipped with
+// the whole inbox, so opening the modal is what pulls it.
+async function openReviewModal() {
+  if (!currentReviewApplication) return;
+  currentReviewReplay = {};
+  $("#reviewModal").classList.remove("hidden");
+  $("#reviewModalTitle").textContent = `Review — ${currentReviewApplication.name}`;
+  $("#reviewModalBody").innerHTML = `<p class="review-signal review-signal-muted">Loading…</p>`;
+
+  if (currentReviewApplication.replayFields?.length) {
+    try {
+      const data = await api(`/api/applications/${encodeURIComponent(currentReviewApplication.id)}/replay`);
+      currentReviewReplay = Object.fromEntries(
+        Object.entries(data.typingReplay || {}).map(([field, snapshots]) => [field, decodeTypingSnapshots(snapshots)])
+      );
+    } catch {
+      currentReviewReplay = {};
+    }
+  }
+  renderReviewModal();
+}
+
+function renderReviewModal() {
+  if (!currentReviewApplication) return;
+  $("#reviewModalTitle").textContent = `Review — ${currentReviewApplication.name}`;
+  $("#reviewModalBody").innerHTML = buildReviewModalBody(currentReviewApplication, currentReviewReplay);
+  $("#archiveApplicationBtn").textContent = currentReviewApplication.archived ? "Restore" : "Archive";
+  $("#archiveApplicationBtn").classList.remove("hidden");
+  $("#deleteApplicationBtn").classList.toggle("hidden", !sessionUser?.canManageUsers);
+}
+
+function closeReviewModal() {
+  stopAllReplays();
+  $("#reviewModal").classList.add("hidden");
+}
+
+function openCompareView(field, otherApplication) {
+  const current = currentReviewApplication;
+  if (!current) return;
+  const a = current[field] || "";
+  const b = otherApplication?.[field] || "";
+  const label = FIELD_LABELS[field] || field;
+  $("#reviewModalTitle").textContent = `Compare — ${label}`;
+  $("#reviewModalBody").innerHTML = `
+    <button type="button" id="compareBackBtn" class="secondary">← Back to application</button>
+    <p class="review-signal review-signal-muted">Highlighted text appears in both applications.</p>
+    <div class="compare-grid">
+      <div class="review-field">
+        <span class="review-field-label">${escapeHtml(current.name)} (this application)</span>
+        <p class="review-field-value">${renderHighlighted(a, b)}</p>
+      </div>
+      <div class="review-field">
+        <span class="review-field-label">${escapeHtml(otherApplication?.name || "Other applicant")}</span>
+        <p class="review-field-value">${b ? renderHighlighted(b, a) : "This application is no longer available (archived or deleted)."}</p>
+      </div>
+    </div>`;
 }
 
 function applicationToAcceptForm(application) {
@@ -691,6 +970,9 @@ function applicationToAcceptForm(application) {
   $$("#acceptApplicationForm input, #acceptApplicationForm select, #acceptApplicationForm button").forEach((control) => {
     if (control.name === "name") return;
     if (control.id === "acceptCallsignPicker") return; // managed by rank selection
+    // Review stays available after a decision so staff can re-check the
+    // replay/signals on an already-accepted or rejected application.
+    if (control.id === "expandReviewBtn") return;
     control.disabled = !application || application.status !== "pending" || !sessionUser?.canEditRoster;
   });
   renderApplications();
@@ -1413,8 +1695,10 @@ function wireEvents() {
           bannedHistory: fields.bannedHistory.value,
           clips: fields.clips.value,
           pastedFields: [...pastedFields],
+          pasteSamples,
           awayCount,
           awayTotalMs,
+          durationMs: formStartedAt ? Date.now() - formStartedAt : 0,
           typingReplay
         })
       });
@@ -1453,13 +1737,19 @@ function wireEvents() {
   });
   updateSubmitState();
 
-  // Start tracking tab-switches only once someone actually starts the
-  // application, so browsing the rest of the site beforehand doesn't count.
-  $("#applicationForm").addEventListener("focusin", () => { awayTracking = true; }, { once: true });
+  // Start tracking tab-switches and elapsed time only once someone actually
+  // starts the application, so browsing the rest of the site beforehand
+  // doesn't count against them.
+  $("#applicationForm").addEventListener("focusin", () => {
+    awayTracking = true;
+    if (!formStartedAt) formStartedAt = Date.now();
+  }, { once: true });
 
   APPLICATION_ESSAY_FIELDS.forEach((name) => {
     const field = $("#applicationForm").elements[name];
-    field?.addEventListener("paste", () => pastedFields.add(name));
+    field?.addEventListener("paste", (e) => {
+      recordPasteSample(name, e.clipboardData?.getData("text") || "");
+    });
     field?.addEventListener("input", () => recordTypingSnapshot(name, field.value));
   });
 
@@ -1753,26 +2043,114 @@ function wireEvents() {
   });
 
   // Full application review modal
-  $("#expandReviewBtn").addEventListener("click", () => {
-    if (!currentReviewApplication) return;
-    $("#reviewModalTitle").textContent = `Review — ${currentReviewApplication.name}`;
-    $("#reviewModalBody").innerHTML = buildReviewModalBody(currentReviewApplication);
-    $("#reviewModal").classList.remove("hidden");
-  });
+  $("#expandReviewBtn").addEventListener("click", openReviewModal);
 
-  $("#reviewModalCloseBtn").addEventListener("click", () => $("#reviewModal").classList.add("hidden"));
+  $("#reviewModalCloseBtn").addEventListener("click", closeReviewModal);
   $("#reviewModal").addEventListener("click", (e) => {
-    if (e.target === $("#reviewModal")) $("#reviewModal").classList.add("hidden");
+    if (e.target === $("#reviewModal")) closeReviewModal();
   });
 
-  $("#reviewModalBody").addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-replay-field]");
-    if (!btn || btn.disabled) return;
-    const field = btn.dataset.replayField;
-    const snapshots = currentReviewApplication?.typingReplay?.[field];
-    const displayEl = $(`.replay-display[data-replay-target="${field}"]`);
-    if (!snapshots?.length || !displayEl) return;
-    playTypingReplay(snapshots, btn, displayEl);
+  $("#reviewModalBody").addEventListener("click", async (e) => {
+    const replayBtn = e.target.closest("[data-replay-field]");
+    if (replayBtn) {
+      const field = replayBtn.dataset.replayField;
+      // Same button toggles: pause if this field is mid-replay, else play.
+      if (replayControllers.has(field)) {
+        finishReplay(field);
+      } else {
+        const scrub = document.querySelector(`[data-replay-scrub="${CSS.escape(field)}"]`);
+        playTypingReplay(field, Number(scrub?.value || 0));
+      }
+      return;
+    }
+
+    const compareBtn = e.target.closest("[data-compare-id]");
+    if (compareBtn) {
+      stopAllReplays();
+      const other = applications.find((a) => a.id === compareBtn.dataset.compareId);
+      openCompareView(compareBtn.dataset.compareField, other);
+      return;
+    }
+
+    if (e.target.id === "compareBackBtn") {
+      renderReviewModal();
+      return;
+    }
+
+    if (e.target.id === "addNoteBtn") {
+      const input = $("#noteInput");
+      const text = input.value.trim();
+      if (!text) return;
+      e.target.disabled = true;
+      try {
+        await api(`/api/applications/${encodeURIComponent(currentReviewApplication.id)}/notes`, {
+          method: "POST",
+          body: JSON.stringify({ text })
+        });
+        await loadApplications();
+        currentReviewApplication = applications.find((a) => a.id === currentReviewApplication.id) || currentReviewApplication;
+        renderReviewModal();
+        toast("Note added.");
+      } catch (err) {
+        toast(err.message);
+        e.target.disabled = false;
+      }
+    }
+  });
+
+  $("#reviewModalBody").addEventListener("input", (e) => {
+    const scrub = e.target.closest("[data-replay-scrub]");
+    if (!scrub) return;
+    const field = scrub.dataset.replayScrub;
+    finishReplay(field);
+    renderReplayFrame(field, Number(scrub.value));
+  });
+
+  // Archive / unarchive / delete
+  $("#archiveApplicationBtn").addEventListener("click", async () => {
+    if (!currentReviewApplication) return;
+    const archiving = !currentReviewApplication.archived;
+    try {
+      await api(`/api/applications/${encodeURIComponent(currentReviewApplication.id)}/archive`, {
+        method: "POST",
+        body: JSON.stringify({ archived: archiving })
+      });
+      await loadApplications();
+      closeReviewModal();
+      toast(archiving ? "Application archived." : "Application restored.");
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#deleteApplicationBtn").addEventListener("click", () => {
+    if (!currentReviewApplication) return;
+    $("#deleteApplicationName").textContent = currentReviewApplication.name;
+    $("#deleteApplicationModal").classList.remove("hidden");
+  });
+
+  $("#deleteApplicationCancelBtn").addEventListener("click", () => {
+    $("#deleteApplicationModal").classList.add("hidden");
+  });
+
+  $("#deleteApplicationConfirmBtn").addEventListener("click", async () => {
+    if (!currentReviewApplication) return;
+    const id = currentReviewApplication.id;
+    $("#deleteApplicationModal").classList.add("hidden");
+    try {
+      await api(`/api/applications/${encodeURIComponent(id)}`, { method: "DELETE" });
+      selectedApplicationId = null;
+      await loadApplications();
+      closeReviewModal();
+      toast("Application permanently deleted.");
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#showArchivedToggle").addEventListener("change", () => {
+    showArchivedApplications = $("#showArchivedToggle").checked;
+    renderApplications();
   });
 
   $("#rejectForm").addEventListener("submit", async (e) => {

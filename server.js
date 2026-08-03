@@ -170,6 +170,20 @@ function requireManageUsers(user, res) {
   return true;
 }
 
+// Who may read/act on applications — the same rule the application routes
+// were each repeating inline.
+function canReviewApplications(user) {
+  return Boolean(user && (user.canEditRoster || user.canOnboard || user.role === "admin"));
+}
+
+function requireReviewApplications(user, res) {
+  if (!canReviewApplications(user)) {
+    send(res, 403, { error: "Forbidden" });
+    return false;
+  }
+  return true;
+}
+
 function requireOnboard(user, res) {
   if (!requireUser(user, res)) return false;
   if (!user.canOnboard && user.role !== "admin") {
@@ -224,25 +238,99 @@ function sanitizeUser(input, existing = {}) {
 }
 
 const KNOWN_APPLICATION_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory", "clips"];
-const MAX_TYPING_SNAPSHOTS = 80;
-const MAX_TYPING_VALUE_LENGTH = 5000;
+const MAX_TYPING_SNAPSHOTS = 120;
+const MAX_TYPING_VALUE_LENGTH = 20000;
+const MAX_TYPING_CHUNK_LENGTH = 5000;
+const MAX_PASTE_SAMPLES = 10;
+const MAX_PASTE_SAMPLE_LENGTH = 200;
+// A chunk of text this large appearing between two snapshots is beyond
+// human typing speed for the interval, so it was pasted or scripted —
+// caught even when the paste event itself didn't fire.
+const BURST_CHARS_THRESHOLD = 120;
 
-// Client-reported {t, v} snapshots for the typing-replay review feature —
-// defense in depth on top of the request body size cap, since a malicious
-// client could otherwise submit an arbitrarily large structure here.
+function clampInt(value, min, max) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+// Snapshots arrive delta-encoded as {t, k, s}: k = how many leading chars are
+// shared with the previous value, s = everything after that. Typing mostly
+// appends, so a whole replay costs about one copy of the essay instead of a
+// full copy of the text at every single step.
 function sanitizeTypingReplay(input) {
   if (!input || typeof input !== "object") return {};
   const result = {};
   for (const field of KNOWN_APPLICATION_FIELDS) {
     const snapshots = input[field];
     if (!Array.isArray(snapshots)) continue;
-    const cleaned = snapshots
-      .slice(0, MAX_TYPING_SNAPSHOTS)
-      .map((s) => ({
-        t: Math.max(0, Math.min(3600000, Math.round(Number(s?.t)) || 0)),
-        v: String(s?.v || "").slice(0, MAX_TYPING_VALUE_LENGTH)
-      }))
-      .filter((s) => s.v);
+    const cleaned = snapshots.slice(0, MAX_TYPING_SNAPSHOTS).map((snap) => ({
+      t: clampInt(snap?.t, 0, 86400000),
+      k: clampInt(snap?.k, 0, MAX_TYPING_VALUE_LENGTH),
+      s: String(snap?.s ?? "").slice(0, MAX_TYPING_CHUNK_LENGTH)
+    }));
+    if (cleaned.length) result[field] = cleaned;
+  }
+  return result;
+}
+
+// Rebuilds the full text at each step from the deltas.
+function decodeTypingSnapshots(snapshots) {
+  const values = [];
+  let prev = "";
+  for (const snap of snapshots) {
+    prev = prev.slice(0, Math.min(snap.k, prev.length)) + snap.s;
+    values.push({ t: snap.t, v: prev });
+  }
+  return values;
+}
+
+// Derived from the replay once at submission time, so reviewers get these
+// signals without the dashboard having to download every applicant's full
+// replay just to render the summary.
+function computeTypingStats(replay) {
+  const stats = {};
+  for (const [field, snapshots] of Object.entries(replay)) {
+    const values = decodeTypingSnapshots(snapshots);
+    if (values.length < 2) continue;
+    let revisions = 0;
+    let maxJumpChars = 0;
+    let maxJumpMs = 0;
+    for (let i = 1; i < values.length; i += 1) {
+      const prev = values[i - 1].v;
+      const current = values[i].v;
+      // Anything that isn't a pure append means text was edited or deleted —
+      // i.e. evidence of actual composition rather than transcription.
+      if (!current.startsWith(prev)) revisions += 1;
+      const added = current.length - prev.length;
+      if (added > maxJumpChars) {
+        maxJumpChars = added;
+        maxJumpMs = Math.max(1, values[i].t - values[i - 1].t);
+      }
+    }
+    stats[field] = {
+      revisions,
+      maxJumpChars,
+      maxJumpCps: maxJumpMs ? Math.round((maxJumpChars / maxJumpMs) * 1000) : 0,
+      finalLength: values[values.length - 1].v.length,
+      snapshots: values.length
+    };
+  }
+  return stats;
+}
+
+// The first N characters of whatever was pasted, so a reviewer can tell a
+// pasted Discord link from three pasted paragraphs.
+function sanitizePasteSamples(input) {
+  if (!input || typeof input !== "object") return {};
+  const result = {};
+  for (const field of KNOWN_APPLICATION_FIELDS) {
+    const samples = input[field];
+    if (!Array.isArray(samples)) continue;
+    const cleaned = samples
+      .slice(0, MAX_PASTE_SAMPLES)
+      .map((sample) => String(sample ?? "").slice(0, MAX_PASTE_SAMPLE_LENGTH))
+      .filter(Boolean);
     if (cleaned.length) result[field] = cleaned;
   }
   return result;
@@ -265,17 +353,26 @@ function sanitizeApplication(input, existing = {}) {
     reviewedAt: input.reviewedAt || existing.reviewedAt || "",
     reviewedBy: input.reviewedBy || existing.reviewedBy || "",
     rosterEntryId: input.rosterEntryId || existing.rosterEntryId || "",
-    // Review signals for staff, not the applicant — pastedFields/away* come
-    // from the client at submission time (best-effort, informational only);
-    // similarityFlags is computed server-side in the submit handler and is
-    // never trusted from client input, only carried forward via `existing`.
+    // Review signals for staff, not the applicant — pastedFields/pasteSamples/
+    // away*/duration/typingReplay come from the client at submission time
+    // (best-effort, informational only). similarityFlags and typingStats are
+    // computed server-side in the submit handler, and notes/auditLog/archived
+    // are managed by their own endpoints — all of those are never trusted from
+    // client input here, only carried forward via `existing`.
     pastedFields: Array.isArray(input.pastedFields)
       ? input.pastedFields.filter((f) => KNOWN_APPLICATION_FIELDS.includes(f))
       : existing.pastedFields || [],
-    awayCount: Math.max(0, Math.min(1000, Math.round(Number(input.awayCount)) || existing.awayCount || 0)),
-    awayTotalMs: Math.max(0, Math.min(86400000, Math.round(Number(input.awayTotalMs)) || existing.awayTotalMs || 0)),
+    pasteSamples: input.pasteSamples !== undefined ? sanitizePasteSamples(input.pasteSamples) : (existing.pasteSamples || {}),
+    awayCount: clampInt(input.awayCount ?? existing.awayCount, 0, 1000),
+    awayTotalMs: clampInt(input.awayTotalMs ?? existing.awayTotalMs, 0, 86400000),
+    durationMs: clampInt(input.durationMs ?? existing.durationMs, 0, 86400000),
     similarityFlags: existing.similarityFlags || [],
-    typingReplay: input.typingReplay !== undefined ? sanitizeTypingReplay(input.typingReplay) : (existing.typingReplay || {})
+    typingStats: existing.typingStats || {},
+    typingReplay: input.typingReplay !== undefined ? sanitizeTypingReplay(input.typingReplay) : (existing.typingReplay || {}),
+    notes: existing.notes || [],
+    auditLog: existing.auditLog || [],
+    archived: Boolean(existing.archived),
+    archivedAt: existing.archivedAt || ""
   };
 }
 
@@ -392,6 +489,8 @@ async function handleApi(req, res) {
 
     const data = await readJson(applicationsPath);
     next.similarityFlags = findSimilarApplications(next, data.applications);
+    next.typingStats = computeTypingStats(next.typingReplay);
+    next.auditLog = [{ at: next.submittedAt, by: "applicant", action: "submitted" }];
     data.applications.unshift(next);
     await writeJson(applicationsPath, data);
 
@@ -581,18 +680,114 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/applications") {
-    if (!user || (!user.canEditRoster && !user.canOnboard && user.role !== "admin")) {
-      send(res, 403, { error: "Forbidden" }); return;
+    if (!requireReviewApplications(user, res)) return;
+    const data = await readJson(applicationsPath);
+    // typingReplay is by far the largest part of an application and is only
+    // needed when a reviewer actually opens a replay, so it's fetched
+    // per-application from /api/applications/:id/replay instead of being
+    // shipped for every applicant on every dashboard load.
+    send(res, 200, {
+      applications: data.applications.map(({ typingReplay, ...rest }) => ({
+        ...rest,
+        replayFields: Object.keys(typingReplay || {})
+      }))
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.match(/^\/api\/applications\/[^/]+\/replay$/)) {
+    if (!requireReviewApplications(user, res)) return;
+    const id = decodeURIComponent(url.pathname.split("/")[3]);
+    const data = await readJson(applicationsPath);
+    const application = data.applications.find((a) => a.id === id);
+    if (!application) {
+      send(res, 404, { error: "Application not found." });
+      return;
     }
-    const applications = await readJson(applicationsPath);
-    send(res, 200, applications);
+    send(res, 200, { typingReplay: application.typingReplay || {} });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/applications\/[^/]+\/notes$/)) {
+    if (!requireReviewApplications(user, res)) return;
+    const id = decodeURIComponent(url.pathname.split("/")[3]);
+    const payload = await bodyJson(req);
+    const text = String(payload.text || "").trim();
+    if (!text) {
+      send(res, 400, { error: "Note text is required." });
+      return;
+    }
+    const data = await readJson(applicationsPath);
+    const index = data.applications.findIndex((a) => a.id === id);
+    if (index === -1) {
+      send(res, 404, { error: "Application not found." });
+      return;
+    }
+    const note = {
+      id: crypto.randomUUID(),
+      text: text.slice(0, 2000),
+      author: user.name,
+      authorEmail: user.email,
+      createdAt: new Date().toISOString()
+    };
+    const application = data.applications[index];
+    application.notes = [...(application.notes || []), note];
+    application.auditLog = [...(application.auditLog || []), {
+      at: note.createdAt, by: user.email, action: "note added"
+    }];
+    await writeJson(applicationsPath, data);
+    send(res, 201, { note });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/applications\/[^/]+\/archive$/)) {
+    if (!requireReviewApplications(user, res)) return;
+    const id = decodeURIComponent(url.pathname.split("/")[3]);
+    const payload = await bodyJson(req).catch(() => ({}));
+    const archived = payload.archived !== false;
+    const data = await readJson(applicationsPath);
+    const index = data.applications.findIndex((a) => a.id === id);
+    if (index === -1) {
+      send(res, 404, { error: "Application not found." });
+      return;
+    }
+    const now = new Date().toISOString();
+    const application = data.applications[index];
+    application.archived = archived;
+    application.archivedAt = archived ? now : "";
+    application.auditLog = [...(application.auditLog || []), {
+      at: now, by: user.email, action: archived ? "archived" : "unarchived"
+    }];
+    await writeJson(applicationsPath, data);
+    send(res, 200, { application: { ...application, typingReplay: undefined } });
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.match(/^\/api\/applications\/[^/]+$/)) {
+    if (!requireManageUsers(user, res)) return;
+    const id = decodeURIComponent(url.pathname.split("/")[3]);
+    const data = await readJson(applicationsPath);
+    const index = data.applications.findIndex((a) => a.id === id);
+    if (index === -1) {
+      send(res, 404, { error: "Application not found." });
+      return;
+    }
+    data.applications.splice(index, 1);
+    await writeJson(applicationsPath, data);
+
+    // Drop any onboarding card pointing at the now-deleted application.
+    const board = await readJson(onboardingPath);
+    const before = board.cards.length;
+    board.cards = board.cards.filter((c) => c.applicationId !== id);
+    if (board.cards.length !== before) await writeJson(onboardingPath, board);
+
+    console.log(`Application ${id} permanently deleted by ${user.email}.`);
+    send(res, 200, { ok: true });
     return;
   }
 
   if (req.method === "POST" && url.pathname.match(/^\/api\/applications\/[^/]+\/reject$/)) {
-    if (!user || (!user.canEditRoster && !user.canOnboard && user.role !== "admin")) {
-      send(res, 403, { error: "Forbidden" }); return;
-    }
+    if (!requireReviewApplications(user, res)) return;
     const id = decodeURIComponent(url.pathname.split("/")[3]);
     const data = await readJson(applicationsPath);
     const index = data.applications.findIndex((application) => application.id === id);
@@ -601,14 +796,18 @@ async function handleApi(req, res) {
       return;
     }
     const rejPayload = await bodyJson(req).catch(() => ({}));
+    const rejectedAt = new Date().toISOString();
     data.applications[index] = sanitizeApplication({
       ...data.applications[index],
       status: "rejected",
       rejectionReason: String(rejPayload.reason || "").trim() || null,
       rejectionNotes: String(rejPayload.notes || "").trim() || null,
-      reviewedAt: new Date().toISOString(),
+      reviewedAt: rejectedAt,
       reviewedBy: user.email
     }, data.applications[index]);
+    data.applications[index].auditLog = [...(data.applications[index].auditLog || []), {
+      at: rejectedAt, by: user.email, action: "rejected"
+    }];
     await writeJson(applicationsPath, data);
 
     // Remove from onboarding board
@@ -621,9 +820,7 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "POST" && url.pathname.match(/^\/api\/applications\/[^/]+\/accept$/)) {
-    if (!user || (!user.canEditRoster && !user.canOnboard && user.role !== "admin")) {
-      send(res, 403, { error: "Forbidden" }); return;
-    }
+    if (!requireReviewApplications(user, res)) return;
     const id = decodeURIComponent(url.pathname.split("/")[3]);
     const payload = await bodyJson(req);
     const applications = await readJson(applicationsPath);
@@ -684,13 +881,17 @@ async function handleApi(req, res) {
     roster.updatedBy = user.email;
     await writeJson(rosterPath, roster);
 
+    const acceptedAt = new Date().toISOString();
     applications.applications[index] = sanitizeApplication({
       ...application,
       status: "accepted",
-      reviewedAt: new Date().toISOString(),
+      reviewedAt: acceptedAt,
       reviewedBy: user.email,
       rosterEntryId: entry.id
     }, application);
+    applications.applications[index].auditLog = [...(application.auditLog || []), {
+      at: acceptedAt, by: user.email, action: `accepted (${entry.callsign} ${entry.rank})`
+    }];
     await writeJson(applicationsPath, applications);
 
     // Advance onboarding card to Application Accepted
@@ -1005,6 +1206,52 @@ async function initDataDir() {
   await restoreMissingSlots();
   await migratePlaintextPasswords();
   await fixStaleVacantFlags();
+  await maintainApplications();
+}
+
+// Auto-archive decided applications after a while so the inbox stays usable,
+// and (only if explicitly configured) purge long-archived ones. Purging is
+// off by default because it destroys data — set APPLICATION_PURGE_DAYS to
+// opt in, and it always runs at least a full archive window behind.
+const APPLICATION_ARCHIVE_DAYS = Number(process.env.APPLICATION_ARCHIVE_DAYS || 30);
+const APPLICATION_PURGE_DAYS = Number(process.env.APPLICATION_PURGE_DAYS || 0);
+
+async function maintainApplications() {
+  const data = await readJson(applicationsPath);
+  const now = Date.now();
+  let archived = 0;
+  let purged = 0;
+
+  if (APPLICATION_ARCHIVE_DAYS > 0) {
+    const cutoff = now - APPLICATION_ARCHIVE_DAYS * 86400000;
+    for (const application of data.applications) {
+      if (application.archived || application.status === "pending") continue;
+      const decidedAt = Date.parse(application.reviewedAt || application.submittedAt);
+      if (!decidedAt || decidedAt > cutoff) continue;
+      application.archived = true;
+      application.archivedAt = new Date().toISOString();
+      application.auditLog = [...(application.auditLog || []), {
+        at: application.archivedAt, by: "system", action: "auto-archived"
+      }];
+      archived += 1;
+    }
+  }
+
+  if (APPLICATION_PURGE_DAYS > 0) {
+    const cutoff = now - APPLICATION_PURGE_DAYS * 86400000;
+    const before = data.applications.length;
+    data.applications = data.applications.filter((application) => {
+      if (!application.archived) return true;
+      const archivedAt = Date.parse(application.archivedAt);
+      return !archivedAt || archivedAt > cutoff;
+    });
+    purged = before - data.applications.length;
+  }
+
+  if (archived || purged) {
+    await writeJson(applicationsPath, data);
+    console.log(`Applications maintenance: ${archived} auto-archived, ${purged} purged.`);
+  }
 }
 
 // One-time cleanup for entries saved before sanitizeRosterEntry derived

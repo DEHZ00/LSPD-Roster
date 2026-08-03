@@ -1027,6 +1027,110 @@ legend {
   50% { opacity: 0; }
 }
 
+.replay-controls {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.replay-speed {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 11px;
+  padding: 3px 4px;
+}
+
+.replay-scrub {
+  accent-color: var(--gold);
+  max-width: 130px;
+}
+
+.review-signal {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 4px 0 0;
+}
+
+.review-signal-warn {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.review-signal-muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.compare-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 720px) {
+  .compare-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.compare-grid mark {
+  background: rgba(212, 168, 32, 0.28);
+  color: var(--ink);
+}
+
+.note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.note-item {
+  background: rgba(0, 0, 0, 0.2);
+  border-left: 2px solid var(--gold-dark);
+  border-radius: 3px;
+  padding: 8px 10px;
+}
+
+.note-meta {
+  color: var(--gold);
+  font-size: 10px;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+}
+
+.note-text {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 3px;
+  white-space: pre-wrap;
+}
+
+.note-compose {
+  display: flex;
+  gap: 8px;
+}
+
+.note-compose textarea {
+  flex: 1;
+}
+
+.archived-tag {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: .5px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
 .empty-state {
   color: var(--muted);
   padding: 16px;
