@@ -1316,12 +1316,21 @@ function renderDiscordPanel() {
       field here — or anywhere in this dashboard — that can set or reveal a bot
       token, and no account, including admin, can change one from the site.
       ${config.linked
-        ? `Your account is linked to <strong>${escapeHtml(config.linked.username || config.linked.id)}</strong>.
+        ? `Your account is linked to <strong>${escapeHtml(config.linked.username || config.linked.id)}</strong>${
+            config.linked.syncedAt ? ` — roles last read ${escapeHtml(new Date(config.linked.syncedAt).toLocaleString())}` : ""
+          }.
+           <button type="button" id="discordRefreshRolesBtn" class="link-btn">Refresh my roles</button>
            <button type="button" id="discordUnlinkBtn" class="link-btn">Unlink</button>`
         : config.oauthEnabled
           ? `<button type="button" id="discordLinkBtn" class="link-btn">Connect your Discord</button>`
           : ""}
-    </p>`;
+    </p>
+    ${config.roleSyncEnabled ? `<p class="notice">
+      <button type="button" id="discordResyncBtn" class="secondary">Re-apply mapping to all linked accounts</button>
+      Runs everyone's <em>stored</em> roles through the mapping above — use it after changing the mapping.
+      It doesn't fetch fresh roles from Discord; without a bot only the member themselves can do that,
+      with their own <strong>Refresh my roles</strong> button.
+    </p>` : ""}`;
 
   const rows = discordState.settings.roleMap || [];
   $("#discordRoleMap").innerHTML = rows.length
@@ -1748,6 +1757,24 @@ function userToForm(user = {}) {
 
   for (const name of ["role", "canEditRoster", "canManageUsers", "canOnboard", "canManageRanks"]) {
     fields[name].disabled = locked || isSelf;
+  }
+  // Mirrors ungrantableFlag() on the server: you can't tick a permission you
+  // don't hold yourself, unless the account already has it (so you can still
+  // untick it). Rank management is the one this matters for — it's per
+  // account rather than part of the Command role.
+  const isAdmin = sessionUser?.role === "admin";
+  for (const flag of ["canEditRoster", "canManageUsers", "canOnboard", "canManageRanks"]) {
+    if (fields[flag].disabled) continue;
+    let reason = "";
+    if (!sessionUser?.[flag] && !isAdmin && !existing?.[flag]) {
+      reason = "You don't have this permission, so you can't grant it.";
+    } else if (flag === "canManageUsers" && !isAdmin && !existing?.[flag]) {
+      // Granting manage-users puts them on the Command rung, which is the
+      // highest rung below admin — so only an admin outranks the result.
+      reason = "Only an admin can grant user management.";
+    }
+    fields[flag].disabled = Boolean(reason);
+    fields[flag].closest(".checkbox").title = reason;
   }
   for (const name of ["name", "email", "password"]) {
     fields[name].disabled = locked;
@@ -2654,12 +2681,30 @@ function wireEvents() {
   $("#saveDiscordBtn").addEventListener("click", saveDiscordSettings);
 
   $("#discordStatus").addEventListener("click", async (event) => {
-    if (event.target.id === "discordLinkBtn") {
+    if (event.target.id === "discordLinkBtn" || event.target.id === "discordRefreshRolesBtn") {
+      // Same OAuth round trip either way; refresh=1 just skips the consent
+      // screen for someone who already authorised.
+      const refresh = event.target.id === "discordRefreshRolesBtn";
       try {
-        const { url } = await api("/api/discord/link");
+        const { url } = await api(`/api/discord/link${refresh ? "?refresh=1" : ""}`);
         window.location.href = url;
       } catch (error) {
         toast(error.message);
+      }
+    }
+    if (event.target.id === "discordResyncBtn") {
+      if (!confirm("Re-apply the role mapping to every linked account?\n\nAnyone whose Discord roles are mapped gets those permissions — this overwrites permissions set by hand for those accounts. Admins are left alone.")) return;
+      const button = event.target;
+      button.disabled = true;
+      try {
+        const result = await api("/api/discord/resync", { method: "POST" });
+        await Promise.all([loadUsers(), loadDiscordSettings()]);
+        toast(result.updated
+          ? `${result.updated} account${result.updated === 1 ? "" : "s"} updated.`
+          : "Nothing changed — everyone already matches the mapping.");
+      } catch (error) {
+        toast(error.message);
+        button.disabled = false;
       }
     }
     if (event.target.id === "discordUnlinkBtn") {

@@ -7,7 +7,7 @@
     { "name": "Commander", "category": "High Command", "aliases": [] },
     { "name": "Captain", "category": "Command", "aliases": [] },
     { "name": "Lieutenant", "category": "Command", "aliases": [] },
-    { "name": "Master Sergeant", "category": "Supervisor", "aliases": [] },
+    { "name": "Master Sergeant", "category": "Command", "aliases": [] },
     { "name": "Staff Sergeant", "category": "Supervisor", "aliases": ["DCI Staff Sergeant", "Staff Sergeant DCI"] },
     { "name": "Sergeant", "category": "Supervisor", "aliases": [] },
     { "name": "Lead Detective", "category": "Detective Bureau", "aliases": [] },

@@ -78,7 +78,10 @@ export function featureSwitches() {
 
 // ── OAuth account linking ──────────────────────────────────────────────────
 
-export function buildAuthorizeUrl(state) {
+// `refresh` is for someone who already linked and just wants their roles
+// re-read. prompt=none skips the consent screen when the authorisation is
+// still valid, so it's a redirect out and straight back rather than a form.
+export function buildAuthorizeUrl(state, { refresh = false } = {}) {
   const { oauthEnabled, clientId, redirectUri } = discordConfig();
   if (!oauthEnabled) return null;
   const params = new URLSearchParams({
@@ -87,7 +90,7 @@ export function buildAuthorizeUrl(state) {
     response_type: "code",
     scope: OAUTH_SCOPES.join(" "),
     state,
-    prompt: "consent"
+    prompt: refresh ? "none" : "consent"
   });
   return `${API_BASE}/oauth2/authorize?${params}`;
 }

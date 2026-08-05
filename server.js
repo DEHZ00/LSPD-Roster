@@ -277,10 +277,29 @@ function targetOutOfReach(actor, target, { allowSelf = false } = {}) {
 }
 
 const PERMISSION_FIELDS = ["role", "canEditRoster", "canManageUsers", "canOnboard", "canManageRanks"];
+const GRANTABLE_FLAGS = ["canEditRoster", "canManageUsers", "canOnboard", "canManageRanks"];
 
 function samePermissions(a, b) {
   return PERMISSION_FIELDS.every((field) => String(a?.[field] ?? "") === String(b?.[field] ?? ""));
 }
+
+// You can't hand out a permission you don't hold yourself. Rank management is
+// the reason this exists: it's granted per account rather than coming with the
+// Command role, so without this a Command user who can't touch ranks could
+// just tick the box on someone else and edit ranks through them.
+function ungrantableFlag(actor, next, previous = {}) {
+  const perms = effectivePermissions(actor);
+  return GRANTABLE_FLAGS.find(
+    (flag) => next[flag] && !previous[flag] && !perms[flag]
+  ) || null;
+}
+
+const FLAG_LABELS = {
+  canEditRoster: "roster edit",
+  canManageUsers: "user management",
+  canOnboard: "onboarding",
+  canManageRanks: "rank management"
+};
 
 // Who may read/act on applications — the same rule the application routes
 // were each repeating inline.
@@ -1269,6 +1288,11 @@ async function handleApi(req, res) {
       send(res, 403, { error: "You cannot create an account at or above your own permission level." });
       return;
     }
+    const ungrantableNew = ungrantableFlag(user, next);
+    if (ungrantableNew) {
+      send(res, 403, { error: `You can't grant ${FLAG_LABELS[ungrantableNew]} — you don't have it yourself.` });
+      return;
+    }
     if (data.users.some((candidate) => candidate.email === next.email)) {
       send(res, 409, { error: "A user with that email already exists." });
       return;
@@ -1305,6 +1329,11 @@ async function handleApi(req, res) {
     }
     if (!isSelf && authorityOf(next) >= authorityOf(user)) {
       send(res, 403, { error: "You cannot grant permissions at or above your own level." });
+      return;
+    }
+    const ungrantable = ungrantableFlag(user, next, data.users[index]);
+    if (ungrantable) {
+      send(res, 403, { error: `You can't grant ${FLAG_LABELS[ungrantable]} — you don't have it yourself.` });
       return;
     }
     if (data.users.some((candidate) => candidate.id !== id && candidate.email === next.email)) {
@@ -1386,7 +1415,40 @@ async function handleApi(req, res) {
     // callback can't be replayed or aimed at somebody else's user record.
     const state = crypto.randomBytes(24).toString("hex");
     oauthStates.set(state, { userId: user.id, createdAt: Date.now() });
-    send(res, 200, { url: buildAuthorizeUrl(state) });
+    const refresh = url.searchParams.get("refresh") === "1";
+    send(res, 200, { url: buildAuthorizeUrl(state, { refresh }) });
+    return;
+  }
+
+  // Re-applies the current role mapping to every linked account, using the
+  // roles already stored on each record. It does NOT ask Discord for fresh
+  // roles — without a bot there's no credential to query the guild with, and
+  // tokens are deliberately never stored. Use it after editing the mapping;
+  // individual members refresh their own roles with the link button.
+  if (req.method === "POST" && url.pathname === "/api/discord/resync") {
+    if (!requireManageUsers(user, res)) return;
+    if (!featureSwitches().permissionSync) {
+      send(res, 503, { error: "Discord permission sync is switched off." });
+      return;
+    }
+    const data = await readJson(usersPath);
+    let updated = 0;
+    let skipped = 0;
+    let touched = false;
+    for (const candidate of data.users) {
+      if (!candidate.discord?.roleIds?.length) continue;
+      // Admins keep everything regardless, and overwriting their stored flags
+      // would just make the Users panel confusing.
+      if (candidate.role === "admin") { skipped += 1; continue; }
+      const before = PERMISSION_FIELDS.map((field) => candidate[field]).join("|");
+      if (await applyDiscordPermissions(candidate, candidate.discord.roleIds)) {
+        candidate.discord.syncedAt = new Date().toISOString();
+        touched = true;
+        if (PERMISSION_FIELDS.map((field) => candidate[field]).join("|") !== before) updated += 1;
+      }
+    }
+    if (touched) await writeJson(usersPath, data);
+    send(res, 200, { updated, skipped });
     return;
   }
 
@@ -1455,6 +1517,21 @@ async function handleApi(req, res) {
       updatedAt: new Date().toISOString(),
       updatedBy: user.email
     };
+    // The mapping is a permission grant with extra steps — without the same
+    // ladder the user routes enforce, a Command account that can't grant
+    // manage-users directly could map a Discord role to it and let the sync
+    // hand it out for them.
+    for (const row of next.roleMap) {
+      const ungrantable = ungrantableFlag(user, row.permissions);
+      if (ungrantable) {
+        send(res, 403, { error: `"${row.label || row.roleId}" grants ${FLAG_LABELS[ungrantable]}, which you don't have yourself.` });
+        return;
+      }
+      if (authorityOf({ role: "viewer", ...row.permissions }) >= authorityOf(user)) {
+        send(res, 403, { error: `"${row.label || row.roleId}" would grant permissions at or above your own level.` });
+        return;
+      }
+    }
     await writeJson(discordPath, next);
     send(res, 200, next);
     return;

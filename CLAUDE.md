@@ -50,7 +50,9 @@ docs/
 
 Ranks live in their own file **on purpose**. `syncSeedImport()` replaces the entire live `roster.json` with the sheet-derived seed whenever a newer import ships, so ranks stored there would be silently wiped by the next `npm run import:roster` + deploy. Nothing in the import path touches `ranks.json`. `POST /api/ranks/restore` re-seeds from the repo copy; a rank still assigned to a roster entry can't be deleted (409).
 
-**User authority ladder** (`ROLE_AUTHORITY` / `authorityOf` / `targetOutOfReach` in server.js): admin 3 › command 2 › supervisor & onboarding 1 › viewer 0. A manage-users account may only delete or change permissions on an account **strictly below its own level**, may not edit its own role or flags, and may not create or promote anyone to its own level. The last account holding `canManageUsers` can't be deleted. Enforced on POST, PUT and DELETE — the dashboard mirrors it for UX only. Before this, any `canManageUsers` account could PUT itself to admin.
+**User authority ladder** (`ROLE_AUTHORITY` / `authorityOf` / `targetOutOfReach` in server.js): admin 3 › command 2 › supervisor & onboarding 1 › viewer 0. A manage-users account may only delete or change permissions on an account **strictly below its own level**, may not edit its own role or flags, and may not create or promote anyone to its own level. The last account holding `canManageUsers` can't be deleted. Before this, any `canManageUsers` account could PUT itself to admin.
+
+On top of the ladder, `ungrantableFlag()` stops anyone handing out a permission they don't hold themselves. `canManageRanks` is why it exists — it's granted per account rather than coming with the Command role, so without it a Command user barred from editing ranks could just tick the box on someone else. The same check runs on the **Discord role mapping** (`PUT /api/discord/settings`), which is a permission grant with extra steps; skipping it there would let someone map a Discord role to a permission they can't grant directly. All of it is enforced on POST, PUT and DELETE, with the dashboard mirroring it (greyed boxes + tooltips) for UX only.
 
 **Roster audit log**: `recordRosterAudit`/`rosterDiff` append to `auditLog` inside `roster.json` (capped at 500, newest first) on every roster write — including Discord-driven ones, recorded as `system:discord`. It rides the same write lock as the change itself so the two can never disagree. **`GET /api/roster` is public and strips `auditLog`**; staff read it via `GET /api/roster/audit` (requireEdit). Don't send the raw roster file to an unauthenticated caller.
 
@@ -74,7 +76,8 @@ Ranks live in their own file **on purpose**. `syncSeedImport()` replaces the ent
 - `GET /api/onboarding` — canOnboard or canEditRoster; `PUT/DELETE /api/onboarding/:id` — requireOnboard
 - `POST/DELETE /api/onboarding/:id/callsign` — requireEdit (approve / decline a queued callsign)
 - `GET /api/discord/config`, `GET /api/discord/link`, `GET /api/discord/callback`, `POST /api/discord/unlink` — signed in
-- `GET/PUT /api/discord/settings` — requireManageUsers (role mapping only, never credentials)
+- `GET/PUT /api/discord/settings` — requireManageUsers (role mapping only, never credentials; obeys the authority ladder)
+- `POST /api/discord/resync` — requireManageUsers; re-applies the mapping to stored roles, never contacts Discord
 - `POST/GET/PUT /api/bugs[/:id]` — submit public, view/manage requires edit or manage-users perms
 
 ## Onboarding: where a callsign gets assigned

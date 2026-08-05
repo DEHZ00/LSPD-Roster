@@ -55,6 +55,32 @@ role.
 hand out `canEditRoster` or `canOnboard`, but minting a site admin stays a
 deliberate human action.
 
+The mapping is itself a permission grant, so it obeys the same authority ladder
+as the Users panel: you can't map a role to a permission you don't hold, and you
+can't map one that would put someone at or above your own level. Otherwise a
+Command account that can't grant user management directly could map a Discord
+role to it and let the sync hand it out on their behalf.
+
+### Keeping roles current without a bot
+
+Roles are read during the OAuth handshake, so with no bot there are two ways to
+refresh them:
+
+- **Refresh my roles** — on each member's own account. Re-runs the handshake
+  with `prompt=none`, so for someone already authorised it's a redirect out and
+  straight back. This is the only path that fetches *live* roles from Discord.
+- **Re-apply mapping to all linked accounts** — for user managers. Runs every
+  linked account's **stored** roles back through the current mapping. Use it
+  after editing the mapping. It does not contact Discord at all: without a bot
+  there's no credential to query the guild with, and access tokens are
+  deliberately never stored.
+
+So a promotion in Discord doesn't reach the site until that member clicks
+Refresh — live propagation is exactly what the bot gateway is for. The re-apply
+button skips admins and only touches accounts whose roles match a mapped role;
+for those it makes Discord the source of truth, overwriting permissions set by
+hand.
+
 ### 3. Bot gateway — the part that can stay dark forever
 
 ```
