@@ -15,7 +15,6 @@ let users = [];
 let applications = [];
 let onboardingCards = [];
 let pendingTerminationId = null;
-let pendingAcademyCardId = null;
 let pendingClearForPatrolId = null;
 let promoteEntryId = null;
 let activeCategoryFilter = "";
@@ -185,19 +184,30 @@ function decodeTypingSnapshots(snapshots) {
   return values;
 }
 
-const onboardingStages = [
+// Replaced by the list the board API serves (ONBOARDING_STAGES in server.js) —
+// this is only the fallback for the first paint before that arrives.
+let onboardingStages = [
   "Application Pending",
   "Application Accepted",
+  "Interview Accepted",
   "Academy Scheduled",
   "Academy Passed",
   "Ride Alongs Completed",
   "Cleared For Patrol"
 ];
 
+// Stages where a callsign gets assigned, and the rank that comes with it.
+// Mirrors CALLSIGN_STAGES on the server.
+const CALLSIGN_STAGES = {
+  "Interview Accepted": "Recruit",
+  "Academy Passed": "Probationary Officer"
+};
+
 // How long a card can sit in each stage before it decays (ms). null = no decay.
 const STAGE_DECAY_MS = {
   "Application Pending":   48 * 3600 * 1000,
   "Application Accepted":  24 * 3600 * 1000,
+  "Interview Accepted":    48 * 3600 * 1000,
   "Academy Scheduled":     72 * 3600 * 1000,
   "Academy Passed":        72 * 3600 * 1000,
   "Ride Alongs Completed": 72 * 3600 * 1000,
@@ -1060,7 +1070,9 @@ function updatePreviewBanner() {
 function setDashboardState() {
   const signedIn = Boolean(sessionUser);
   const isRealAdmin = realSessionUser?.role === "admin" || (!realSessionUser && sessionUser?.role === "admin");
-  const canSeeOnboarding = canOnboard();
+  // Roster editors get the pipeline too — approving queued callsign
+  // requests is their job, and the queue lives on that board.
+  const canSeeOnboarding = canOnboard() || Boolean(sessionUser?.canEditRoster);
   const canSeeApplications = canReviewApplications();
   const canSeeDashboard = signedIn && (sessionUser?.canEditRoster || canSeeApplications);
 
@@ -1136,7 +1148,7 @@ async function loadPermittedData() {
   if (!sessionUser) return;
   if (canReviewApplications()) await loadApplications();
   if (sessionUser.canManageUsers) await loadUsers();
-  if (canOnboard()) await loadOnboarding();
+  if (canOnboard() || sessionUser.canEditRoster) await loadOnboarding();
   if (sessionUser.canEditRoster || sessionUser.canManageUsers) await loadBugReports();
   if (canManageRanks()) renderRankManager();
   if (sessionUser.canManageUsers) await loadDiscordSettings();
@@ -1385,7 +1397,9 @@ function renderRosterAudit(log) {
 async function loadOnboarding() {
   const data = await api("/api/onboarding");
   onboardingCards = data.cards;
+  if (Array.isArray(data.stages) && data.stages.length) onboardingStages = data.stages;
   renderKanban();
+  renderCallsignQueue();
 }
 
 function cardDecayInfo(card) {
@@ -1449,6 +1463,9 @@ function renderKanban() {
                 ${card.callsign ? `<span class="pill">${escapeHtml(card.callsign)}</span>` : ""}
                 ${card.rank ? `<span class="pill">${escapeHtml(card.rank)}</span>` : ""}
               </div>` : ""}
+              ${card.pendingCallsign ? `<div class="card-pending-callsign" title="Requested by ${escapeHtml(card.pendingCallsign.requestedBy || "")}">
+                ⏳ Awaiting ${escapeHtml(card.pendingCallsign.rank || "")} callsign
+              </div>` : ""}
               ${card.acceptedBy ? `<small class="card-accepted">👤 ${escapeHtml(card.acceptedBy)}</small>` : ""}
               ${info ? `<div class="card-timer${info.decayed ? " card-timer-overdue" : ""}">${formatCountdown(info.remaining)}</div>` : ""}
             </div>`;
@@ -1501,6 +1518,53 @@ function renderKanban() {
   });
 }
 
+// ── Callsign approval queue ──
+// Onboarding staff can move a recruit into a callsign stage, but writing the
+// callsign to the roster needs canEditRoster. The move queues a request here
+// instead of failing, and a roster editor picks the actual callsign.
+
+function pendingCallsignCards() {
+  return onboardingCards.filter((card) => card.pendingCallsign);
+}
+
+function renderCallsignQueue() {
+  const panel = $("#callsignQueue");
+  if (!panel) return;
+  const canApprove = Boolean(sessionUser?.canEditRoster);
+  const queued = pendingCallsignCards();
+  panel.classList.toggle("hidden", !canApprove);
+  $("#callsignQueueCount").textContent = queued.length ? String(queued.length) : "";
+  if (!canApprove) return;
+
+  $("#callsignQueueList").innerHTML = queued.length
+    ? queued.map((card) => {
+        const requested = card.pendingCallsign;
+        const when = requested.requestedAt ? new Date(requested.requestedAt).toLocaleString() : "";
+        const free = vacantCallsignsForRank(requested.rank).length;
+        return `<div class="queue-item" data-queue-card="${escapeHtml(card.id)}">
+          <div class="queue-item-head">
+            <strong>${escapeHtml(card.name)}</strong>
+            <span class="pill">${escapeHtml(requested.rank || "")}</span>
+          </div>
+          <small class="queue-meta">
+            ${escapeHtml(requested.stage || "")} · requested by ${escapeHtml(requested.requestedBy || "unknown")}${when ? ` · ${escapeHtml(when)}` : ""}
+          </small>
+          ${free ? "" : `<small class="queue-warning">No vacant ${escapeHtml(requested.rank || "")} slots — free one up first.</small>`}
+          <div class="button-row">
+            <button type="button" data-queue-approve ${free ? "" : "disabled"}>Assign callsign</button>
+            <button type="button" class="secondary" data-queue-decline>Decline</button>
+          </div>
+        </div>`;
+      }).join("")
+    : `<p class="notice">No callsign requests waiting.</p>`;
+}
+
+function vacantCallsignsForRank(rank) {
+  return rosterData.roster.filter(
+    (entry) => (entry.vacant || entry.activity === "Vacant") && cleanRank(entry.rank) === cleanRank(rank)
+  );
+}
+
 // Stage picker used by the touch path. Routes through requestStageMove so the
 // Academy Passed and Cleared For Patrol prompts behave identically whether the
 // card was dragged or tapped.
@@ -1524,10 +1588,15 @@ async function requestStageMove(cardId, targetStage) {
   const card = onboardingCards.find((item) => item.id === cardId);
   if (!card || card.stage === targetStage) return;
 
-  if (targetStage === "Academy Passed") {
-    pendingAcademyCardId = cardId;
-    populateAcademyRankDropdown();
-    $("#academyPassedModal").classList.remove("hidden");
+  // Stages that need a callsign: a roster editor picks one now, anyone else
+  // moves the card and leaves a request in the approval queue.
+  if (CALLSIGN_STAGES[targetStage]) {
+    if (sessionUser?.canEditRoster) {
+      openCallsignModal({ cardId, stage: targetStage, mode: "move" });
+    } else {
+      await moveOnboardingCard(cardId, targetStage, {},
+        "Moved — a callsign request is now waiting for roster staff.");
+    }
     return;
   }
 
@@ -1541,7 +1610,9 @@ async function requestStageMove(cardId, targetStage) {
   await moveOnboardingCard(cardId, targetStage);
 }
 
-async function moveOnboardingCard(cardId, stage, extra = {}) {
+// Returns true only when the move actually landed — callers add their own
+// follow-up message, and a failed move must not be reported as a success.
+async function moveOnboardingCard(cardId, stage, extra = {}, message = null) {
   try {
     await api(`/api/onboarding/${encodeURIComponent(cardId)}`, {
       method: "PUT",
@@ -1549,29 +1620,61 @@ async function moveOnboardingCard(cardId, stage, extra = {}) {
     });
     // Always reload both so roster badges (clearedForPatrol, rank, etc.) stay in sync
     await Promise.all([loadOnboarding(), loadRoster()]);
-    toast(`Moved to "${stage}"`);
+    toast(message || `Moved to "${stage}"`);
+    return true;
   } catch (err) {
     toast(err.message);
+    return false;
   }
 }
 
-function populateAcademyRankDropdown() {
-  $("#academyRankPicker").innerHTML = rankCategories
+// ── Callsign modal ──
+// One modal for every path that puts someone in a callsign: a roster editor
+// moving a card into Interview Accepted or Academy Passed, and approving a
+// request that onboarding staff queued.
+let callsignModalState = null;
+
+function openCallsignModal({ cardId, stage, mode }) {
+  const card = onboardingCards.find((item) => item.id === cardId);
+  if (!card) return;
+  const defaultRank = card.pendingCallsign?.rank || CALLSIGN_STAGES[stage] || "Recruit";
+  callsignModalState = { cardId, stage, mode };
+
+  $("#callsignModalTitle").textContent = mode === "approve"
+    ? `Assign callsign — ${card.name}`
+    : `${stage} — ${card.name}`;
+  $("#callsignModalBlurb").textContent = mode === "approve"
+    ? `Requested by ${card.pendingCallsign?.requestedBy || "onboarding"}. Assigning writes their roster entry immediately.`
+    : "Pick a rank and a vacant callsign. The roster updates immediately.";
+  $("#callsignConfirmBtn").textContent = mode === "approve" ? "Approve & assign" : "Assign";
+
+  $("#callsignModalRank").innerHTML = rankCategories
     .map(
       (cat) => `<optgroup label="${escapeHtml(cat.name)}">${cat.ranks
         .map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`)
         .join("")}</optgroup>`
     )
     .join("");
-  $("#academyRankPicker").value = "Probationary Officer";
-  populateAcademyCallsigns("Probationary Officer");
+  // Fall back to whatever's first if the expected rank was renamed or removed
+  // in the Rank Manager — otherwise the picker silently shows a blank value.
+  $("#callsignModalRank").value = defaultRank;
+  if (!$("#callsignModalRank").value) $("#callsignModalRank").selectedIndex = 0;
+  populateCallsignModalOptions($("#callsignModalRank").value);
+  // Without this a roster editor can't move anyone into a callsign stage while
+  // every slot for that rank is full — cancel is the only way out, and the
+  // card is stuck. Queueing leaves the request for whoever frees a slot.
+  $("#callsignQueueBtn").classList.toggle("hidden", mode !== "move");
+  $("#callsignModal").classList.remove("hidden");
 }
 
-function populateAcademyCallsigns(rank) {
-  const picker = $("#academyCallsignPicker");
-  const vacant = rosterData.roster.filter(
-    (e) => (e.vacant || e.activity === "Vacant") && cleanRank(e.rank) === cleanRank(rank)
-  );
+function closeCallsignModal() {
+  callsignModalState = null;
+  $("#callsignModal").classList.add("hidden");
+}
+
+function populateCallsignModalOptions(rank) {
+  const picker = $("#callsignModalCallsign");
+  const vacant = vacantCallsignsForRank(rank);
   picker.innerHTML = vacant.length
     ? [
         `<option value="">— Select callsign —</option>`,
@@ -1719,7 +1822,7 @@ function showView(view) {
   $("#applyView").classList.toggle("hidden", view !== "apply");
   $("#dashboardView").classList.toggle("hidden", view !== "dashboard");
   $("#onboardingView").classList.toggle("hidden", view !== "onboarding");
-  if (view === "onboarding" && (canOnboard())) {
+  if (view === "onboarding" && (canOnboard() || sessionUser?.canEditRoster)) {
     loadOnboarding();
     if (canReviewApplications()) loadApplications();
   }
@@ -1819,24 +1922,73 @@ function wireEvents() {
     });
   });
 
-  $("#academyRankPicker").addEventListener("change", () => {
-    populateAcademyCallsigns($("#academyRankPicker").value);
+  $("#callsignModalRank").addEventListener("change", () => {
+    populateCallsignModalOptions($("#callsignModalRank").value);
   });
 
-  $("#academyConfirmBtn").addEventListener("click", async () => {
-    if (!pendingAcademyCardId) return;
-    const callsign = $("#academyCallsignPicker").value;
+  $("#callsignConfirmBtn").addEventListener("click", async () => {
+    if (!callsignModalState) return;
+    const callsign = $("#callsignModalCallsign").value;
     if (!callsign) { toast("Please select a callsign."); return; }
-    const rank = $("#academyRankPicker").value;
-    const id = pendingAcademyCardId;
-    pendingAcademyCardId = null;
-    $("#academyPassedModal").classList.add("hidden");
-    await moveOnboardingCard(id, "Academy Passed", { callsign, rank });
+    const rank = $("#callsignModalRank").value;
+    const { cardId, stage, mode } = callsignModalState;
+    const button = $("#callsignConfirmBtn");
+    button.disabled = true;
+    try {
+      if (mode === "approve") {
+        // The card is already in the stage — this only fills in the callsign.
+        await api(`/api/onboarding/${encodeURIComponent(cardId)}/callsign`, {
+          method: "POST",
+          body: JSON.stringify({ callsign, rank })
+        });
+        await Promise.all([loadOnboarding(), loadRoster()]);
+        toast(`Assigned ${callsign}.`);
+      } else if (!await moveOnboardingCard(cardId, stage, { callsign, rank })) {
+        // Callsign taken since the picker was built, say — keep the modal up
+        // so they can choose another instead of starting the move again.
+        populateCallsignModalOptions(rank);
+        return;
+      }
+      closeCallsignModal();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      button.disabled = false;
+    }
   });
 
-  $("#academyCancelBtn").addEventListener("click", () => {
-    pendingAcademyCardId = null;
-    $("#academyPassedModal").classList.add("hidden");
+  $("#callsignQueueBtn").addEventListener("click", async () => {
+    if (!callsignModalState) return;
+    const { cardId, stage } = callsignModalState;
+    const rank = $("#callsignModalRank").value;
+    closeCallsignModal();
+    // No callsign in the payload, so the server queues it like any other
+    // move by someone who can't assign one.
+    await moveOnboardingCard(cardId, stage, { rank }, "Moved — callsign request left in the queue.");
+  });
+
+  $("#callsignCancelBtn").addEventListener("click", closeCallsignModal);
+
+  $("#callsignQueueList").addEventListener("click", async (event) => {
+    const item = event.target.closest("[data-queue-card]");
+    if (!item) return;
+    const cardId = item.dataset.queueCard;
+    if (event.target.closest("[data-queue-approve]")) {
+      const card = onboardingCards.find((entry) => entry.id === cardId);
+      openCallsignModal({ cardId, stage: card?.pendingCallsign?.stage || card?.stage, mode: "approve" });
+      return;
+    }
+    if (event.target.closest("[data-queue-decline]")) {
+      const card = onboardingCards.find((entry) => entry.id === cardId);
+      if (!confirm(`Decline the callsign request for ${card?.name || "this recruit"}? They stay in ${card?.stage || "this stage"} with no callsign.`)) return;
+      try {
+        await api(`/api/onboarding/${encodeURIComponent(cardId)}/callsign`, { method: "DELETE" });
+        await loadOnboarding();
+        toast("Request declined.");
+      } catch (error) {
+        toast(error.message);
+      }
+    }
   });
 
   // ── Promote / Reassign modal ──
@@ -1886,11 +2038,8 @@ function wireEvents() {
     }
   });
 
-  $("#academyPassedModal").addEventListener("click", (e) => {
-    if (e.target === $("#academyPassedModal")) {
-      pendingAcademyCardId = null;
-      $("#academyPassedModal").classList.add("hidden");
-    }
+  $("#callsignModal").addEventListener("click", (e) => {
+    if (e.target === $("#callsignModal")) closeCallsignModal();
   });
 
   $("#terminateConfirmBtn").addEventListener("click", async () => {
@@ -2633,7 +2782,7 @@ if (hashView === "apply") {
   showView("apply");
 } else if (hashView === "dashboard" && sessionUser?.canEditRoster) {
   showView("dashboard");
-} else if (hashView === "onboarding" && (canOnboard())) {
+} else if (hashView === "onboarding" && (canOnboard() || sessionUser?.canEditRoster)) {
   showView("onboarding");
 }
 await checkSavedApplicationStatus();

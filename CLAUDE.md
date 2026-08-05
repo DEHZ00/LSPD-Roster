@@ -71,7 +71,8 @@ Ranks live in their own file **on purpose**. `syncSeedImport()` replaces the ent
 - `PUT/DELETE /api/roster/:id` — requireEdit
 - `GET/POST /api/users`, `PUT/DELETE /api/users/:id` — requireManageUsers + authority ladder
 - `GET /api/ranks` — public; `PUT /api/ranks`, `POST /api/ranks/restore` — requireManageRanks
-- `GET/PUT/DELETE /api/onboarding[/:id]` — requireOnboard
+- `GET /api/onboarding` — canOnboard or canEditRoster; `PUT/DELETE /api/onboarding/:id` — requireOnboard
+- `POST/DELETE /api/onboarding/:id/callsign` — requireEdit (approve / decline a queued callsign)
 - `GET /api/discord/config`, `GET /api/discord/link`, `GET /api/discord/callback`, `POST /api/discord/unlink` — signed in
 - `GET/PUT /api/discord/settings` — requireManageUsers (role mapping only, never credentials)
 - `POST/GET/PUT /api/bugs[/:id]` — submit public, view/manage requires edit or manage-users perms
@@ -84,11 +85,33 @@ card to "Application Accepted". A callsign is a roster slot, so assigning one at
 acceptance made accepting a roster write, which is what blocked onboarding-only
 staff from accepting anyone at all.
 
-Rank and callsign are chosen together at **Academy Passed**, which has three
-paths in `PUT /api/onboarding/:id`: fill the matching vacant slot, move an
-existing entry onto the requested callsign, or (the common case now, since
-recruits arrive with no entry) create a new entry. Every path checks
-`occupiedCallsignConflict` unless it's filling a slot already known to be vacant.
+Pipeline stages live in `ONBOARDING_STAGES` (server.js), are served with the
+board by `GET /api/onboarding`, and are validated on every move — the frontend
+list is only a first-paint fallback. Two of them assign a callsign, listed in
+`CALLSIGN_STAGES` with the rank each implies:
+
+| Stage | Rank |
+|---|---|
+| Interview Accepted | Recruit |
+| Academy Passed | Probationary Officer |
+
+**The callsign approval queue.** Writing a callsign needs `canEditRoster`, but
+moving a card is onboarding work. So a move into a callsign stage by someone
+without roster edit permission moves the card and leaves
+`card.pendingCallsign = { stage, rank, requestedBy, requestedByEmail, requestedAt }`
+instead of failing. A roster editor then picks the actual callsign via
+`POST /api/onboarding/:id/callsign` (or clears it with `DELETE`). A roster
+editor moving the card gets the picker immediately and skips the queue.
+Moving a card *off* a callsign stage clears any request still queued against it.
+
+All of it goes through one helper, `assignCallsignToCard` — fill a vacant slot,
+move an existing entry, or create one, with a single `occupiedCallsignConflict`
+check up front and nothing written when it returns an error. Don't reimplement
+roster assignment anywhere else; the three-way branching is why this was
+previously able to drop a recruit silently.
+
+`GET /api/onboarding` is readable by `canOnboard` **or** `canEditRoster`, since
+approving queued requests is the roster editor's job.
 
 ## Discord
 

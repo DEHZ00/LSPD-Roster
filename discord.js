@@ -343,6 +343,3 @@ export function diffMappedRoles(previousRoleIds, nextRoleIds, settings) {
   };
 }
 
-export function rankForRoleIds(roleIds, settings) {
-  return permissionsForRoles(roleIds || [], settings).rank || "";
-}

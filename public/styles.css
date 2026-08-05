@@ -1194,7 +1194,7 @@ legend {
 .kanban-board {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(6, minmax(200px, 1fr));
+  grid-template-columns: repeat(7, minmax(200px, 1fr));
   overflow-x: auto;
   padding-bottom: 8px;
 }
@@ -1655,7 +1655,7 @@ legend {
   .kanban-board {
     -webkit-overflow-scrolling: touch;
     scroll-snap-type: x mandatory;
-    grid-template-columns: repeat(6, minmax(150px, 1fr));
+    grid-template-columns: repeat(7, minmax(150px, 1fr));
   }
   .kanban-col {
     min-height: 300px;
@@ -1940,5 +1940,104 @@ legend {
     min-height: 40px;
     min-width: 44px;
     padding: 8px 12px;
+  }
+}
+
+/* ── Callsign approval queue ── */
+
+.callsign-queue {
+  margin-bottom: 12px;
+}
+
+.queue-count {
+  background: var(--gold);
+  border-radius: 10px;
+  color: #101010;
+  font-size: 12px;
+  padding: 1px 8px;
+  vertical-align: middle;
+}
+
+.queue-count:empty {
+  display: none;
+}
+
+/* Capped so a busy queue can't push the board itself off the screen. */
+#callsignQueueList {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.queue-item {
+  align-items: center;
+  background: var(--band);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold);
+  border-radius: 4px;
+  column-gap: 12px;
+  display: grid;
+  grid-template-areas:
+    "head actions"
+    "meta actions";
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+}
+
+.queue-item-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  grid-area: head;
+}
+
+.queue-item .queue-meta,
+.queue-item .queue-warning {
+  grid-area: meta;
+}
+
+.queue-item .button-row {
+  grid-area: actions;
+  margin-top: 0;
+}
+
+.queue-item .button-row button {
+  padding: 7px 12px;
+}
+
+.queue-meta {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.queue-warning {
+  color: var(--red);
+  display: block;
+  font-size: 11px;
+  margin-top: 5px;
+}
+
+/* Pending marker on the pipeline card itself, so the board shows what's
+   blocked without opening the queue. */
+.card-pending-callsign {
+  background: rgba(212, 168, 32, 0.12);
+  border: 1px dashed var(--gold);
+  border-radius: 3px;
+  color: var(--gold);
+  font-size: 11px;
+  margin-top: 4px;
+  padding: 3px 6px;
+}
+
+@media (max-width: 600px) {
+  .queue-item {
+    grid-template-areas:
+      "head"
+      "meta"
+      "actions";
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
   }
 }

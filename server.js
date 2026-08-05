@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildAuthorizeUrl, defaultDiscordSettings, diffMappedRoles, discordConfig,
   exchangeCode, featureSwitches, fetchGuildRoles, fetchIdentity,
-  permissionsForRoles, sanitizeDiscordSettings, sendChannelMessage, startBot
+  permissionsForRoles, sanitizeDiscordSettings, sendChannelMessage, startBot, stopBot
 } from "./discord.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -290,7 +290,23 @@ function canReviewApplications(user) {
 }
 
 function requireReviewApplications(user, res) {
+  // 401 when signed out, 403 when signed in without the permission — an
+  // expired or revoked session used to read as "Forbidden", which tells the
+  // user their account lacks access rather than that they need to sign in.
+  if (!requireUser(user, res)) return false;
   if (!canReviewApplications(user)) {
+    send(res, 403, { error: "You do not have permission to review applications." });
+    return false;
+  }
+  return true;
+}
+
+// Bug reports are visible to anyone who can act on them — roster editors and
+// user managers alike.
+function requireManageBugs(user, res) {
+  if (!requireUser(user, res)) return false;
+  const perms = effectivePermissions(user);
+  if (!perms.canEditRoster && !perms.canManageUsers) {
     send(res, 403, { error: "Forbidden" });
     return false;
   }
@@ -448,6 +464,115 @@ function ranksInUse(rosterEntries) {
     used.set(name.toLowerCase(), (used.get(name.toLowerCase()) || 0) + 1);
   }
   return used;
+}
+
+// The recruit pipeline, in order. Served with the board so the frontend can't
+// drift out of sync, and validated on every move.
+const ONBOARDING_STAGES = [
+  "Application Pending",
+  "Application Accepted",
+  "Interview Accepted",
+  "Academy Scheduled",
+  "Academy Passed",
+  "Ride Alongs Completed",
+  "Cleared For Patrol"
+];
+
+// Stages that place someone in a callsign, and the rank that comes with it.
+// Reaching one of these needs a roster write, which is why they're queued for
+// approval when the person moving the card can't edit the roster.
+const CALLSIGN_STAGES = {
+  "Interview Accepted": "Recruit",
+  "Academy Passed": "Probationary Officer"
+};
+
+// Puts a pipeline card's person into a callsign, filling a vacant slot, moving
+// their existing entry, or creating one — whichever applies. Mutates `card`
+// and writes the roster. Returns an error string, or null on success; nothing
+// is written when it returns an error.
+async function assignCallsignToCard(card, { callsign, rank, user }) {
+  const trimmed = String(callsign || "").trim();
+  if (!trimmed) return "A callsign is required.";
+  const newRank = normalizeRankName(rank);
+  if (!newRank) return "A rank is required.";
+
+  const roster = await readJson(rosterPath);
+  // One conflict check covering all three paths below, excluding whatever
+  // entry this person already holds.
+  const conflict = occupiedCallsignConflict(roster.roster, trimmed, card.rosterId || null);
+  if (conflict) return `Callsign ${trimmed} is already assigned to ${conflict.name}.`;
+
+  const vacantIdx = roster.roster.findIndex(
+    (entry) => (entry.vacant || entry.activity === "Vacant") &&
+               String(entry.callsign || "").trim() === trimmed
+  );
+  const today = new Date().toISOString().split("T")[0];
+
+  if (vacantIdx !== -1) {
+    const before = { ...roster.roster[vacantIdx] };
+    Object.assign(roster.roster[vacantIdx], {
+      name: card.name,
+      rank: newRank,
+      activity: "Active",
+      vacant: false,
+      notes: card.discord || "",
+      promotionDate: today,
+      updatedAt: new Date().toISOString()
+    });
+    recordRosterAudit(roster, user, `assigned ${trimmed} (${newRank})`,
+      roster.roster[vacantIdx], rosterDiff(before, roster.roster[vacantIdx]));
+
+    // Vacate whatever slot they held before, so the old callsign reopens.
+    if (card.rosterId && card.rosterId !== roster.roster[vacantIdx].id) {
+      const oldIdx = roster.roster.findIndex((entry) => entry.id === card.rosterId);
+      if (oldIdx !== -1) {
+        recordRosterAudit(roster, user, "vacated (moved slot)", roster.roster[oldIdx], [
+          { field: "name", from: String(roster.roster[oldIdx].name || ""), to: "" }
+        ]);
+        Object.assign(roster.roster[oldIdx], {
+          name: "", activity: "Vacant", vacant: true, notes: "",
+          employeeNotes: "", clearedForPatrol: false, promotionDate: "",
+          updatedAt: new Date().toISOString()
+        });
+      }
+    }
+    card.rosterId = roster.roster[vacantIdx].id;
+  } else if (card.rosterId) {
+    const rIdx = roster.roster.findIndex((entry) => entry.id === card.rosterId);
+    if (rIdx === -1) return "This recruit's roster entry no longer exists.";
+    const before = { ...roster.roster[rIdx] };
+    Object.assign(roster.roster[rIdx], {
+      rank: newRank,
+      callsign: trimmed,
+      activity: "Active",
+      vacant: false,
+      updatedAt: new Date().toISOString()
+    });
+    recordRosterAudit(roster, user, `assigned ${trimmed} (${newRank})`,
+      roster.roster[rIdx], rosterDiff(before, roster.roster[rIdx]));
+  } else {
+    // No vacant slot with that callsign and no entry yet — this is a recruit
+    // joining the roster for the first time.
+    const entry = sanitizeRosterEntry({
+      callsign: trimmed,
+      name: card.name,
+      rank: newRank,
+      activity: "Active",
+      notes: card.discord || "",
+      promotionDate: today
+    });
+    roster.roster.push(entry);
+    card.rosterId = entry.id;
+    recordRosterAudit(roster, user, `assigned ${trimmed} (${newRank}, new entry)`, entry, rosterDiff({}, entry));
+  }
+
+  card.callsign = trimmed;
+  card.rank = newRank;
+  card.pendingCallsign = null;
+  roster.updatedAt = new Date().toISOString();
+  roster.updatedBy = user.email;
+  await writeJson(rosterPath, roster);
+  return null;
 }
 
 const KNOWN_APPLICATION_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory", "clips"];
@@ -1426,9 +1551,16 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/onboarding") {
-    if (!requireOnboard(user, res)) return;
+    // Roster editors need this too — the callsign approval queue lives here,
+    // and approving is their job, not the onboarding team's.
+    if (!requireUser(user, res)) return;
+    const perms = effectivePermissions(user);
+    if (!perms.canOnboard && !perms.canEditRoster) {
+      send(res, 403, { error: "Onboarding permission required." });
+      return;
+    }
     const board = await readJson(onboardingPath);
-    send(res, 200, board);
+    send(res, 200, { ...board, stages: ONBOARDING_STAGES });
     return;
   }
 
@@ -1440,115 +1572,86 @@ async function handleApi(req, res) {
     const cardIdx = board.cards.findIndex((c) => c.id === cardId);
     if (cardIdx === -1) { send(res, 404, { error: "Card not found." }); return; }
 
-    board.cards[cardIdx].stage = payload.stage;
-    board.cards[cardIdx].movedBy = user.name;
-    board.cards[cardIdx].movedAt = new Date().toISOString();
-    board.cards[cardIdx].stageEnteredAt = new Date().toISOString();
+    const stage = String(payload.stage || "").trim();
+    if (!ONBOARDING_STAGES.includes(stage)) {
+      send(res, 400, { error: "Unknown pipeline stage." });
+      return;
+    }
 
-    // Academy Passed → promote to selected rank and fill the chosen vacant slot
-    if (payload.stage === "Academy Passed" && payload.callsign) {
-      const newRank = String(payload.rank || "Probationary Officer").trim();
-      const roster = await readJson(rosterPath);
+    const card = board.cards[cardIdx];
+    card.stage = stage;
+    card.movedBy = user.name;
+    card.movedAt = new Date().toISOString();
+    card.stageEnteredAt = new Date().toISOString();
 
-      // Find the vacant slot with the selected callsign
-      const vacantIdx = roster.roster.findIndex(
-        (e) => (e.vacant || e.activity === "Vacant") &&
-                String(e.callsign).trim() === String(payload.callsign).trim()
-      );
-
-      const card = board.cards[cardIdx];
-      if (vacantIdx !== -1) {
-        // Fill the vacant slot with the recruit's details
-        const before = { ...roster.roster[vacantIdx] };
-        roster.roster[vacantIdx].name = card.name;
-        roster.roster[vacantIdx].rank = newRank;
-        roster.roster[vacantIdx].activity = "Active";
-        roster.roster[vacantIdx].vacant = false;
-        roster.roster[vacantIdx].notes = card.discord || "";
-        roster.roster[vacantIdx].promotionDate = new Date().toISOString().split("T")[0];
-        roster.roster[vacantIdx].updatedAt = new Date().toISOString();
-        recordRosterAudit(roster, user, "academy passed", roster.roster[vacantIdx], rosterDiff(before, roster.roster[vacantIdx]));
-
-        // Vacate the recruit's old slot (if it exists and is a different entry)
-        const oldRosterId = card.rosterId;
-        if (oldRosterId && oldRosterId !== roster.roster[vacantIdx].id) {
-          const oldIdx = roster.roster.findIndex((e) => e.id === oldRosterId);
-          if (oldIdx !== -1) {
-            recordRosterAudit(roster, user, "vacated (academy move)", roster.roster[oldIdx], [
-              { field: "name", from: String(roster.roster[oldIdx].name || ""), to: "" }
-            ]);
-            roster.roster[oldIdx].name = "";
-            roster.roster[oldIdx].activity = "Vacant";
-            roster.roster[oldIdx].vacant = true;
-            roster.roster[oldIdx].notes = "";
-            roster.roster[oldIdx].promotionDate = "";
-            roster.roster[oldIdx].updatedAt = new Date().toISOString();
-          }
-        }
-
-        // Point the card's rosterId at the new PO slot
-        card.rosterId = roster.roster[vacantIdx].id;
-      } else if (card.rosterId) {
-        // No matching vacant slot, but the recruit already holds an entry —
-        // move them onto the requested callsign in place.
-        const rIdx = roster.roster.findIndex((e) => e.id === card.rosterId);
-        if (rIdx !== -1) {
-          const callsign = String(payload.callsign || "").trim();
-          const conflict = occupiedCallsignConflict(roster.roster, callsign, roster.roster[rIdx].id);
-          if (conflict) {
-            send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
-            return;
-          }
-          const before = { ...roster.roster[rIdx] };
-          roster.roster[rIdx].rank = newRank;
-          roster.roster[rIdx].callsign = payload.callsign;
-          roster.roster[rIdx].activity = "Active";
-          roster.roster[rIdx].vacant = false;
-          roster.roster[rIdx].updatedAt = new Date().toISOString();
-          recordRosterAudit(roster, user, "academy passed", roster.roster[rIdx], rosterDiff(before, roster.roster[rIdx]));
-        }
+    // Stages that put someone in a callsign. Assigning one is a roster write,
+    // so onboarding staff can move the card but the callsign itself waits for
+    // somebody with canEditRoster — the request is queued on the card and
+    // shows up in the dashboard's callsign approval queue.
+    const stageRank = CALLSIGN_STAGES[stage];
+    if (stageRank) {
+      const rank = String(payload.rank || stageRank).trim();
+      if (payload.callsign && effectivePermissions(user).canEditRoster) {
+        const failure = await assignCallsignToCard(card, { callsign: payload.callsign, rank, user });
+        if (failure) { send(res, 409, { error: failure }); return; }
       } else {
-        // Recruits no longer get a roster entry at acceptance, so Academy
-        // Passed is where most of them join the roster for the first time.
-        // Without this branch the callsign landed on the card only and the
-        // officer never appeared on the roster at all.
-        const callsign = String(payload.callsign || "").trim();
-        const conflict = occupiedCallsignConflict(roster.roster, callsign);
-        if (conflict) {
-          send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
-          return;
-        }
-        const entry = sanitizeRosterEntry({
-          callsign,
-          name: card.name,
-          rank: newRank,
-          activity: "Active",
-          notes: card.discord || "",
-          promotionDate: new Date().toISOString().split("T")[0]
-        });
-        roster.roster.push(entry);
-        card.rosterId = entry.id;
-        recordRosterAudit(roster, user, "academy passed (new entry)", entry, rosterDiff({}, entry));
+        card.pendingCallsign = {
+          stage,
+          rank,
+          requestedBy: user.name,
+          requestedByEmail: user.email,
+          requestedAt: new Date().toISOString()
+        };
       }
-
-      board.cards[cardIdx].callsign = payload.callsign;
-      board.cards[cardIdx].rank = newRank;
-      roster.updatedAt = new Date().toISOString();
-      roster.updatedBy = user.email;
-      await writeJson(rosterPath, roster);
+    } else {
+      // Moved off a callsign stage before anyone approved it — drop the
+      // request rather than leaving it queued against the wrong stage.
+      card.pendingCallsign = null;
     }
 
     // Sync clearedForPatrol on roster entry based on stage
-    if (board.cards[cardIdx].rosterId) {
+    if (card.rosterId) {
       const roster = await readJson(rosterPath);
-      const rIdx = roster.roster.findIndex((e) => e.id === board.cards[cardIdx].rosterId);
+      const rIdx = roster.roster.findIndex((e) => e.id === card.rosterId);
       if (rIdx !== -1) {
-        roster.roster[rIdx].clearedForPatrol = payload.stage === "Cleared For Patrol";
+        roster.roster[rIdx].clearedForPatrol = stage === "Cleared For Patrol";
         roster.roster[rIdx].updatedAt = new Date().toISOString();
         await writeJson(rosterPath, roster);
       }
     }
 
+    await writeJson(onboardingPath, board);
+    send(res, 200, { card });
+    return;
+  }
+
+  // Approving a queued callsign request. requireEdit, not requireOnboard —
+  // this is the roster write the queue exists to gate.
+  if (req.method === "POST" && url.pathname.match(/^\/api\/onboarding\/[^/]+\/callsign$/)) {
+    if (!requireEdit(user, res)) return;
+    const cardId = decodeURIComponent(url.pathname.split("/")[3]);
+    const payload = await bodyJson(req);
+    const board = await readJson(onboardingPath);
+    const cardIdx = board.cards.findIndex((c) => c.id === cardId);
+    if (cardIdx === -1) { send(res, 404, { error: "Card not found." }); return; }
+    const card = board.cards[cardIdx];
+    const rank = String(payload.rank || card.pendingCallsign?.rank || CALLSIGN_STAGES[card.stage] || "").trim();
+    const failure = await assignCallsignToCard(card, { callsign: payload.callsign, rank, user });
+    if (failure) { send(res, 409, { error: failure }); return; }
+    await writeJson(onboardingPath, board);
+    send(res, 200, { card });
+    return;
+  }
+
+  // Declining a queued request — clears it without touching the roster. The
+  // card stays where it is so staff can move it back deliberately.
+  if (req.method === "DELETE" && url.pathname.match(/^\/api\/onboarding\/[^/]+\/callsign$/)) {
+    if (!requireEdit(user, res)) return;
+    const cardId = decodeURIComponent(url.pathname.split("/")[3]);
+    const board = await readJson(onboardingPath);
+    const cardIdx = board.cards.findIndex((c) => c.id === cardId);
+    if (cardIdx === -1) { send(res, 404, { error: "Card not found." }); return; }
+    board.cards[cardIdx].pendingCallsign = null;
     await writeJson(onboardingPath, board);
     send(res, 200, { card: board.cards[cardIdx] });
     return;
@@ -1616,18 +1719,14 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/bugs") {
-    if (!user || (!user.canManageUsers && !user.canEditRoster && user.role !== "admin")) {
-      send(res, 403, { error: "Forbidden" }); return;
-    }
+    if (!requireManageBugs(user, res)) return;
     const data = await readJson(bugsPath);
     send(res, 200, data);
     return;
   }
 
   if (req.method === "PUT" && url.pathname.match(/^\/api\/bugs\/[^/]+$/)) {
-    if (!user || (!user.canManageUsers && !user.canEditRoster && user.role !== "admin")) {
-      send(res, 403, { error: "Forbidden" }); return;
-    }
+    if (!requireManageBugs(user, res)) return;
     const id = decodeURIComponent(url.pathname.split("/")[3]);
     const payload = await bodyJson(req);
     const data = await readJson(bugsPath);
@@ -1977,6 +2076,17 @@ setInterval(() => {
     if (isSessionExpired(session)) sessions.delete(token);
   }
 }, 60 * 60 * 1000).unref();
+
+// Railway sends SIGTERM on redeploy; close the gateway socket deliberately so
+// Discord sees a clean disconnect rather than a timeout.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => {
+    stopBot();
+    server.close(() => process.exit(0));
+    // Don't hang forever on a keep-alive connection that never closes.
+    setTimeout(() => process.exit(0), 5000).unref();
+  });
+}
 
 initDataDir().then(() => {
   server.listen(port, () => {

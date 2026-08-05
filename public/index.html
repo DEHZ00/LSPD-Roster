@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LSPD Roster</title>
     <link rel="icon" type="image/webp" href="/Lspdss.webp">
-    <link rel="stylesheet" href="/styles.css?v=9">
+    <link rel="stylesheet" href="/styles.css?v=10">
   </head>
   <body>
     <header class="topbar">
@@ -201,6 +201,19 @@
 
         <!-- Pipeline tab -->
         <div id="pipelineTab">
+          <section id="callsignQueue" class="editor-panel callsign-queue hidden">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Awaiting approval</p>
+                <h3>Callsign requests <span id="callsignQueueCount" class="queue-count"></span></h3>
+              </div>
+            </div>
+            <p class="notice">
+              Onboarding staff moved these recruits into a stage that needs a callsign.
+              Assigning one writes to the roster, so it waits for someone with roster edit permission.
+            </p>
+            <div id="callsignQueueList"></div>
+          </section>
           <div class="kanban-board" id="kanbanBoard"></div>
           <div id="terminateZone" class="terminate-zone hidden">
             <span>&#9660; DROP HERE TO TERMINATE EMPLOYEE</span>
@@ -292,23 +305,24 @@
       </div>
 
       <!-- Academy Passed modal -->
-      <div id="academyPassedModal" class="modal-overlay hidden">
+      <div id="callsignModal" class="modal-overlay hidden">
         <div class="modal">
-          <h3>Academy Passed</h3>
-          <p>Assign a rank and callsign for this recruit. Their roster entry will be updated immediately.</p>
+          <h3 id="callsignModalTitle">Assign callsign</h3>
+          <p id="callsignModalBlurb">Pick a rank and a vacant callsign. The roster updates immediately.</p>
           <div class="form-grid" style="margin-top:8px">
             <label>
               <span>Rank</span>
-              <select id="academyRankPicker"></select>
+              <select id="callsignModalRank"></select>
             </label>
             <label>
               <span>Callsign</span>
-              <select id="academyCallsignPicker"></select>
+              <select id="callsignModalCallsign"></select>
             </label>
           </div>
           <div class="button-row" style="margin-top:4px">
-            <button id="academyConfirmBtn">Confirm Promotion</button>
-            <button id="academyCancelBtn" class="secondary">Cancel</button>
+            <button id="callsignConfirmBtn">Assign</button>
+            <button id="callsignQueueBtn" type="button" class="secondary hidden">Move &amp; decide later</button>
+            <button id="callsignCancelBtn" class="secondary">Cancel</button>
           </div>
         </div>
       </div>
@@ -635,6 +649,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=18" type="module"></script>
+    <script src="/app.js?v=19" type="module"></script>
   </body>
 </html>
