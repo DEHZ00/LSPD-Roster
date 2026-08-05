@@ -1,24 +1,152 @@
 {
   "ranks": [
-    { "name": "Commissioner", "category": "High Command", "aliases": ["Commisioner"] },
-    { "name": "Chief", "category": "High Command", "aliases": ["Chief Of Police"] },
-    { "name": "Assistant Chief", "category": "High Command", "aliases": [] },
-    { "name": "Deputy Chief", "category": "High Command", "aliases": [] },
-    { "name": "Commander", "category": "High Command", "aliases": [] },
-    { "name": "Captain", "category": "Command", "aliases": [] },
-    { "name": "Lieutenant", "category": "Command", "aliases": [] },
-    { "name": "Master Sergeant", "category": "Command", "aliases": [] },
-    { "name": "Staff Sergeant", "category": "Supervisor", "aliases": ["DCI Staff Sergeant", "Staff Sergeant DCI"] },
-    { "name": "Sergeant", "category": "Supervisor", "aliases": [] },
-    { "name": "Lead Detective", "category": "Detective Bureau", "aliases": [] },
-    { "name": "Corporal", "category": "Supervisor In Training", "aliases": [] },
-    { "name": "Detective 2", "category": "Detective Bureau", "aliases": ["Detective II"] },
-    { "name": "Detective", "category": "Detective Bureau", "aliases": ["Detective 1", "Detective I"] },
-    { "name": "Sr. Officer", "category": "Patrol Officer", "aliases": ["Senior Officer"] },
-    { "name": "Officer II", "category": "Patrol Officer", "aliases": [] },
-    { "name": "Officer I", "category": "Patrol Officer", "aliases": [] },
-    { "name": "Probationary Officer", "category": "Probationary Officer", "aliases": [] },
-    { "name": "Recruit", "category": "Officer In Training", "aliases": [] }
+    {
+      "name": "Commissioner",
+      "category": "High Command",
+      "aliases": [
+        "Commisioner"
+      ],
+      "callsignFrom": "",
+      "callsignTo": ""
+    },
+    {
+      "name": "Chief",
+      "category": "High Command",
+      "aliases": [
+        "Chief Of Police"
+      ],
+      "callsignFrom": "101",
+      "callsignTo": "101"
+    },
+    {
+      "name": "Assistant Chief",
+      "category": "High Command",
+      "aliases": [],
+      "callsignFrom": "102",
+      "callsignTo": "102"
+    },
+    {
+      "name": "Deputy Chief",
+      "category": "High Command",
+      "aliases": [],
+      "callsignFrom": "103",
+      "callsignTo": "103"
+    },
+    {
+      "name": "Commander",
+      "category": "High Command",
+      "aliases": [],
+      "callsignFrom": "104",
+      "callsignTo": "105"
+    },
+    {
+      "name": "Captain",
+      "category": "Command",
+      "aliases": [],
+      "callsignFrom": "201",
+      "callsignTo": "202"
+    },
+    {
+      "name": "Lieutenant",
+      "category": "Command",
+      "aliases": [],
+      "callsignFrom": "204",
+      "callsignTo": "206"
+    },
+    {
+      "name": "Master Sergeant",
+      "category": "Command",
+      "aliases": [],
+      "callsignFrom": "209",
+      "callsignTo": "210"
+    },
+    {
+      "name": "Staff Sergeant",
+      "category": "Supervisor",
+      "aliases": [
+        "DCI Staff Sergeant",
+        "Staff Sergeant DCI"
+      ],
+      "callsignFrom": "211",
+      "callsignTo": "214"
+    },
+    {
+      "name": "Sergeant",
+      "category": "Supervisor",
+      "aliases": [],
+      "callsignFrom": "215",
+      "callsignTo": "226"
+    },
+    {
+      "name": "Lead Detective",
+      "category": "Detective Bureau",
+      "aliases": [],
+      "callsignFrom": "730",
+      "callsignTo": "734"
+    },
+    {
+      "name": "Corporal",
+      "category": "Supervisor In Training",
+      "aliases": [],
+      "callsignFrom": "319",
+      "callsignTo": "327"
+    },
+    {
+      "name": "Detective 2",
+      "category": "Detective Bureau",
+      "aliases": [
+        "Detective II"
+      ],
+      "callsignFrom": "720",
+      "callsignTo": "729"
+    },
+    {
+      "name": "Detective",
+      "category": "Detective Bureau",
+      "aliases": [
+        "Detective 1",
+        "Detective I"
+      ],
+      "callsignFrom": "701",
+      "callsignTo": "715"
+    },
+    {
+      "name": "Sr. Officer",
+      "category": "Patrol Officer",
+      "aliases": [
+        "Senior Officer"
+      ],
+      "callsignFrom": "342",
+      "callsignTo": "369"
+    },
+    {
+      "name": "Officer II",
+      "category": "Patrol Officer",
+      "aliases": [],
+      "callsignFrom": "401",
+      "callsignTo": "428"
+    },
+    {
+      "name": "Officer I",
+      "category": "Patrol Officer",
+      "aliases": [],
+      "callsignFrom": "451",
+      "callsignTo": "494"
+    },
+    {
+      "name": "Probationary Officer",
+      "category": "Probationary Officer",
+      "aliases": [],
+      "callsignFrom": "501",
+      "callsignTo": "557"
+    },
+    {
+      "name": "Recruit",
+      "category": "Officer In Training",
+      "aliases": [],
+      "callsignFrom": "601",
+      "callsignTo": "675"
+    }
   ],
   "updatedAt": null,
   "updatedBy": "system:seed"

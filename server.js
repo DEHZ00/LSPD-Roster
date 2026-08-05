@@ -455,10 +455,50 @@ function sanitizeRankList(input) {
       category: normalizeRankName(raw?.category).slice(0, 60) || "Other",
       aliases: Array.isArray(raw?.aliases)
         ? [...new Set(raw.aliases.map((a) => normalizeRankName(a).slice(0, 60)).filter(Boolean))].slice(0, 20)
-        : []
+        : [],
+      // Callsign block this rank draws from, used to generate vacant slots.
+      // Digits only — the roster's callsigns are numeric and the generator
+      // counts through them.
+      callsignFrom: sanitizeCallsignBound(raw?.callsignFrom),
+      callsignTo: sanitizeCallsignBound(raw?.callsignTo)
     });
   }
   return ranks;
+}
+
+function sanitizeCallsignBound(value) {
+  const text = String(value ?? "").trim();
+  return /^\d{1,6}$/.test(text) ? text : "";
+}
+
+// Every callsign in a rank's declared block, keeping the digit width of the
+// lower bound so a block written as 007-012 doesn't come out as 7, 8, 9.
+const MAX_GENERATED_SLOTS = 300;
+
+function callsignsInRange(from, to) {
+  const start = Number(from);
+  const end = Number(to);
+  if (!from || !to || !Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+  const width = String(from).length;
+  const out = [];
+  for (let n = start; n <= end && out.length < MAX_GENERATED_SLOTS; n += 1) {
+    out.push(String(n).padStart(width, "0"));
+  }
+  return out;
+}
+
+// Two ranks pointing at the same numbers is the one thing that would let slot
+// generation stomp on another rank's block, so it's rejected at save time.
+function overlappingRankBlocks(ranks) {
+  const claimed = new Map();
+  for (const rank of ranks) {
+    for (const callsign of callsignsInRange(rank.callsignFrom, rank.callsignTo)) {
+      const owner = claimed.get(callsign);
+      if (owner && owner !== rank.name) return { callsign, a: owner, b: rank.name };
+      claimed.set(callsign, rank.name);
+    }
+  }
+  return null;
 }
 
 async function readRanks() {
@@ -1557,9 +1597,75 @@ async function handleApi(req, res) {
         return;
       }
     }
+    for (const rank of ranks) {
+      const hasFrom = Boolean(rank.callsignFrom);
+      const hasTo = Boolean(rank.callsignTo);
+      if (hasFrom !== hasTo) {
+        send(res, 400, { error: `${rank.name} needs both a start and an end callsign, or neither.` });
+        return;
+      }
+      if (hasFrom && Number(rank.callsignTo) < Number(rank.callsignFrom)) {
+        send(res, 400, { error: `${rank.name}'s callsign range runs backwards (${rank.callsignFrom}–${rank.callsignTo}).` });
+        return;
+      }
+    }
+    const clash = overlappingRankBlocks(ranks);
+    if (clash) {
+      send(res, 409, {
+        error: `Callsign ${clash.callsign} is claimed by both ${clash.a} and ${clash.b}. Ranks can't share callsign numbers.`
+      });
+      return;
+    }
     const next = { ranks, updatedAt: new Date().toISOString(), updatedBy: user.email };
     await writeJson(ranksPath, next);
     send(res, 200, next);
+    return;
+  }
+
+  // Creates the vacant slots for a rank's callsign block. Only ever *adds*
+  // callsigns that don't exist yet — any number already on the roster is left
+  // exactly as it is, whoever holds it and whatever rank it belongs to.
+  if (req.method === "POST" && url.pathname === "/api/ranks/slots") {
+    if (!requireManageRanks(user, res)) return;
+    const payload = await bodyJson(req);
+    const wanted = normalizeRankName(payload.name);
+    const { ranks } = await readRanks();
+    const rank = ranks.find((item) => item.name.toLowerCase() === wanted.toLowerCase());
+    if (!rank) {
+      send(res, 404, { error: "Rank not found." });
+      return;
+    }
+    const block = callsignsInRange(rank.callsignFrom, rank.callsignTo);
+    if (!block.length) {
+      send(res, 400, { error: `Set a callsign range for ${rank.name} first.` });
+      return;
+    }
+    const roster = await readJson(rosterPath);
+    const taken = new Set(roster.roster.map((entry) => String(entry.callsign || "").trim()).filter(Boolean));
+    const missing = block.filter((callsign) => !taken.has(callsign));
+    for (const callsign of missing) {
+      roster.roster.push(sanitizeRosterEntry({
+        callsign,
+        name: "",
+        rank: rank.name,
+        activity: "Vacant",
+        divisions: {},
+        strikes: {}
+      }));
+    }
+    if (missing.length) {
+      roster.updatedAt = new Date().toISOString();
+      roster.updatedBy = user.email;
+      recordRosterAudit(roster, user, `created ${missing.length} ${rank.name} slot(s)`,
+        { callsign: `${missing[0]}–${missing[missing.length - 1]}`, name: "" },
+        [{ field: "rank", from: "", to: rank.name }]);
+      await writeJson(rosterPath, roster);
+    }
+    send(res, 200, {
+      created: missing.length,
+      skipped: block.length - missing.length,
+      capped: block.length >= MAX_GENERATED_SLOTS
+    });
     return;
   }
 

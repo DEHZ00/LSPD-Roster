@@ -1702,8 +1702,33 @@ legend {
   border-radius: 4px;
   display: grid;
   gap: 8px;
-  grid-template-columns: 28px minmax(0, 1.4fr) minmax(0, 1fr) 36px auto;
+  grid-template-columns: 26px minmax(0, 1.2fr) minmax(0, 0.9fr) 132px minmax(0, 0.8fr) 30px auto;
   padding: 6px 8px;
+}
+
+.rank-row-callsigns {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
+.rank-row-callsigns input {
+  min-width: 0;
+  text-align: center;
+}
+
+.rank-row-dash {
+  color: var(--muted);
+}
+
+.rank-row-slotnote {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* A block with slots still to create is the one thing worth nudging about. */
+.rank-row-slotnote.needs-slots {
+  color: var(--gold);
 }
 
 .rank-row-order {
@@ -1746,7 +1771,7 @@ legend {
 .rank-add-row {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 110px 110px auto;
   margin-bottom: 12px;
 }
 
@@ -1920,14 +1945,18 @@ legend {
   .rank-row {
     grid-template-columns: 24px minmax(0, 1fr) 30px;
     grid-template-areas:
-      "order name count"
-      "order category actions";
+      "order name      count"
+      "order category  count"
+      "order callsigns note"
+      "order actions   actions";
   }
   .rank-row-order { grid-area: order; }
   .rank-row-name { grid-area: name; }
   .rank-row-category { grid-area: category; }
+  .rank-row-callsigns { grid-area: callsigns; }
+  .rank-row-slotnote { grid-area: note; text-align: right; }
   .rank-row-count { grid-area: count; }
-  .rank-row-actions { grid-area: actions; }
+  .rank-row-actions { grid-area: actions; flex-wrap: wrap; }
 
   .rank-add-row {
     grid-template-columns: 1fr;

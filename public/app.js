@@ -299,20 +299,57 @@ function categoryForRank(rank) {
   return match?.category || "Other";
 }
 
-function groupedRoster(rows) {
-  const buckets = new Map([...rankCategories.map((category) => [category.name, []]), ["Other", []]]);
-  rows.forEach((entry) => {
-    buckets.get(categoryForRank(entry.rank)).push(entry);
-  });
-  for (const entries of buckets.values()) {
-    entries.sort((a, b) => {
-      const na = parseInt(a.callsign, 10);
-      const nb = parseInt(b.callsign, 10);
-      if (!isNaN(na) && !isNaN(nb)) return na - nb;
-      return String(a.callsign || "").localeCompare(String(b.callsign || ""));
-    });
+function byCallsign(a, b) {
+  const na = parseInt(a.callsign, 10);
+  const nb = parseInt(b.callsign, 10);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  return String(a.callsign || "").localeCompare(String(b.callsign || ""));
+}
+
+// Roster sections follow the rank ladder and split a category into separate
+// sections whenever its ranks aren't next to each other. Detective Bureau is
+// exactly why: Lead Detective sits above Corporal and the other two below it,
+// so merging by category name alone dumped all three into one block and every
+// detective showed up in the wrong place on the roster.
+function rosterSections(rows) {
+  const sections = [];
+  const sectionForRank = new Map();
+  let previousCategory = null;
+  for (const rank of rankList) {
+    const category = rank.category || "Other";
+    if (category !== previousCategory) {
+      sections.push({ category, entries: [] });
+      previousCategory = category;
+    }
+    const index = sections.length - 1;
+    sectionForRank.set(cleanRank(rank.name).toLowerCase(), index);
+    for (const alias of rank.aliases || []) {
+      sectionForRank.set(cleanRank(alias).toLowerCase(), index);
+    }
   }
-  return [...buckets.entries()].filter(([, entries]) => entries.length);
+  sections.push({ category: "Other", entries: [] });
+  const otherIndex = sections.length - 1;
+
+  for (const entry of rows) {
+    const key = cleanRank(entry.rank).toLowerCase();
+    const index = sectionForRank.has(key) ? sectionForRank.get(key) : otherIndex;
+    sections[index].entries.push(entry);
+  }
+  for (const section of sections) section.entries.sort(byCallsign);
+  return sections.filter((section) => section.entries.length)
+    .map((section) => [section.category, section.entries]);
+}
+
+// The overview cards are a summary, so a category that appears twice in the
+// ladder still gets a single card with the combined count.
+function groupedRoster(rows) {
+  const buckets = new Map();
+  for (const [category, entries] of rosterSections(rows)) {
+    if (!buckets.has(category)) buckets.set(category, []);
+    buckets.get(category).push(...entries);
+  }
+  for (const entries of buckets.values()) entries.sort(byCallsign);
+  return [...buckets.entries()];
 }
 
 function deduplicatedRoster() {
@@ -384,7 +421,7 @@ function renderFilters() {
 
 function renderRosterTable() {
   const rows = filteredRoster();
-  $("#rosterBody").innerHTML = groupedRoster(rows)
+  $("#rosterBody").innerHTML = rosterSections(rows)
     .map(([category, entries]) => {
       const filled = entries.filter((entry) => entry.activity !== "Vacant" && !entry.vacant).length;
       const categoryRow = `<tr class="category-row">
@@ -434,8 +471,8 @@ function renderEntryList() {
     );
   }
 
-  // Group by rank category, preserving callsign sort within each group
-  const grouped = groupedRoster(rows);
+  // Ladder order, same as the public roster
+  const grouped = rosterSections(rows);
 
   if (!rows.length) {
     $("#entryList").innerHTML = `<div class="empty-state">No entries match.</div>`;
@@ -1225,6 +1262,22 @@ function renderUsers() {
 let rankDraft = [];
 let rankDraftDirty = false;
 
+// Mirrors callsignsInRange() on the server so the manager can show how many
+// slots a block still needs before you press the button.
+const MAX_GENERATED_SLOTS = 300;
+
+function callsignsInRange(from, to) {
+  const start = Number(from);
+  const end = Number(to);
+  if (!from || !to || !Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+  const width = String(from).length;
+  const out = [];
+  for (let n = start; n <= end && out.length < MAX_GENERATED_SLOTS; n += 1) {
+    out.push(String(n).padStart(width, "0"));
+  }
+  return out;
+}
+
 function markRankDraftDirty(dirty) {
   rankDraftDirty = dirty;
   $("#rankDirtyNotice").classList.toggle("hidden", !dirty);
@@ -1239,14 +1292,33 @@ function renderRankManager() {
     if (name) inUse.set(name, (inUse.get(name) || 0) + 1);
   }
 
+  const existingCallsigns = new Set(
+    rosterData.roster.map((entry) => String(entry.callsign || "").trim()).filter(Boolean)
+  );
+
   $("#rankManagerList").innerHTML = rankDraft.map((rank, index) => {
     const count = inUse.get(rank.name.toLowerCase()) || 0;
+    const block = callsignsInRange(rank.callsignFrom, rank.callsignTo);
+    const missing = block.filter((callsign) => !existingCallsigns.has(callsign)).length;
+    const slotNote = block.length
+      ? (missing
+          ? `${missing} of ${block.length} not created yet`
+          : `${block.length} slots ready`)
+      : "no callsigns set";
     return `<div class="rank-row" data-rank-index="${index}">
       <span class="rank-row-order">${index + 1}</span>
       <input class="rank-row-name" value="${escapeHtml(rank.name)}" data-rank-field="name" aria-label="Rank name">
       <input class="rank-row-category" value="${escapeHtml(rank.category)}" data-rank-field="category" list="rankCategoryOptions" aria-label="Category">
-      <span class="rank-row-count" title="Roster entries at this rank">${count}</span>
+      <span class="rank-row-callsigns">
+        <input inputmode="numeric" placeholder="from" value="${escapeHtml(rank.callsignFrom || "")}" data-rank-field="callsignFrom" aria-label="Callsign range start">
+        <span class="rank-row-dash">–</span>
+        <input inputmode="numeric" placeholder="to" value="${escapeHtml(rank.callsignTo || "")}" data-rank-field="callsignTo" aria-label="Callsign range end">
+      </span>
+      <span class="rank-row-slotnote${missing ? " needs-slots" : ""}">${escapeHtml(slotNote)}</span>
+      <span class="rank-row-count" title="Officers at this rank">${count}</span>
       <span class="rank-row-actions">
+        <button type="button" class="secondary" data-rank-slots ${missing && !rankDraftDirty ? "" : "disabled"}
+          title="${rankDraftDirty ? "Save the rank list first" : missing ? `Create ${missing} vacant slot(s)` : "Nothing to create"}">＋ slots</button>
         <button type="button" class="secondary" data-rank-move="up" ${index === 0 ? "disabled" : ""} aria-label="Move up">▲</button>
         <button type="button" class="secondary" data-rank-move="down" ${index === rankDraft.length - 1 ? "disabled" : ""} aria-label="Move down">▼</button>
         <button type="button" class="danger" data-rank-remove ${count ? "disabled" : ""} title="${count ? `${count} officer(s) still hold this rank` : "Remove"}">✕</button>
@@ -2616,7 +2688,7 @@ function wireEvents() {
   });
 
   // ── Rank Manager ──
-  $("#rankManagerList").addEventListener("click", (event) => {
+  $("#rankManagerList").addEventListener("click", async (event) => {
     const row = event.target.closest("[data-rank-index]");
     if (!row) return;
     const index = Number(row.dataset.rankIndex);
@@ -2633,6 +2705,29 @@ function wireEvents() {
       rankDraft.splice(index, 1);
       markRankDraftDirty(true);
       renderRankManager();
+      return;
+    }
+    if (event.target.closest("[data-rank-slots]")) {
+      const rank = rankDraft[index];
+      const block = callsignsInRange(rank.callsignFrom, rank.callsignTo);
+      if (!confirm(`Create the missing ${rank.name} slots between ${rank.callsignFrom} and ${rank.callsignTo}?\n\nAny callsign in that range that already exists is left alone — nobody gets moved or overwritten.`)) return;
+      const button = event.target.closest("[data-rank-slots]");
+      button.disabled = true;
+      try {
+        const result = await api("/api/ranks/slots", {
+          method: "POST",
+          body: JSON.stringify({ name: rank.name })
+        });
+        await loadRoster();
+        renderRankManager();
+        toast(result.created
+          ? `Created ${result.created} ${rank.name} slot${result.created === 1 ? "" : "s"}${result.skipped ? `, left ${result.skipped} existing alone` : ""}.`
+          : "Every callsign in that range already exists.");
+        if (result.capped) toast(`Range capped at ${MAX_GENERATED_SLOTS} slots per go — run it again for the rest.`);
+      } catch (error) {
+        toast(error.message);
+        renderRankManager();
+      }
     }
   });
 
@@ -2652,11 +2747,17 @@ function wireEvents() {
     if (rankDraft.some((rank) => rank.name.toLowerCase() === name.toLowerCase())) {
       return toast("That rank already exists.");
     }
-    rankDraft.push({ name, category: fields.category.value.trim() || "Other", aliases: [] });
+    rankDraft.push({
+      name,
+      category: fields.category.value.trim() || "Other",
+      aliases: [],
+      callsignFrom: fields.callsignFrom.value.trim(),
+      callsignTo: fields.callsignTo.value.trim()
+    });
     markRankDraftDirty(true);
     event.currentTarget.reset();
     renderRankManager();
-    toast("Added — drag it into place with ▲▼, then Save.");
+    toast("Added — put it in place with ▲▼, Save, then ＋ slots to create its callsigns.");
   });
 
   $("#saveRanksBtn").addEventListener("click", saveRanks);

@@ -46,7 +46,11 @@ docs/
 
 **Callsign uniqueness** is enforced server-side (`occupiedCallsignConflict` in server.js) on every path that assigns a callsign to a roster entry — new entry creation, the Promote/Reassign swap, application acceptance, and the onboarding Academy-Passed flow. The frontend also restricts callsign pickers to vacant slots, but that's a UX convenience only; the server is the actual guard.
 
-**Ranks**: single source of truth is `data/ranks.json`, served by `GET /api/ranks` and edited through the dashboard's Rank Manager (`canManageRanks`). It's a **flat array, ordered highest to lowest** — that order *is* the promotion ladder. Each entry has a `category` (the heading it appears under on the public roster) and `aliases` (old spellings already in roster.json, e.g. `Commisioner`, `DCI Staff Sergeant` — matched by `categoryForRank`, never offered in a picker). A category's ranks don't have to be adjacent: Lead Detective sits between Sergeant and Corporal in the ladder while sharing the Detective Bureau card with the ranks below Corporal.
+**Ranks**: single source of truth is `data/ranks.json`, served by `GET /api/ranks` and edited through the dashboard's Rank Manager (`canManageRanks`). It's a **flat array, ordered highest to lowest** — that order *is* the promotion ladder. Each entry has a `category` (its heading on the roster), `aliases` (old spellings already in roster.json, e.g. `Commisioner`, `DCI Staff Sergeant` — matched by `categoryForRank`, never offered in a picker), and an optional `callsignFrom`/`callsignTo` block.
+
+**Roster sections follow the ladder, not the category name.** `rosterSections()` in app.js walks `rankList` and starts a new section whenever the category changes, so a category whose ranks aren't adjacent renders in *both* places. Detective Bureau is exactly that case — Lead Detective sits above Corporal and Detective/Detective 2 below it, so it appears twice. Grouping by category name alone (what `groupedRoster` still does, for the summary cards only) put all three detectives in one block and every one of them in the wrong place. Use `rosterSections` for anything that lists people in rank order; `groupedRoster` only for totals.
+
+**Callsign blocks**: a rank's `callsignFrom`/`callsignTo` drive `POST /api/ranks/slots`, which creates the vacant slots for that range. It only ever *adds* callsigns that don't already exist — every number already on the roster is left untouched whoever holds it, which is the guarantee the whole feature rests on. Saving ranks rejects reversed ranges and any two ranks claiming the same number (`overlappingRankBlocks`). Generation is capped at `MAX_GENERATED_SLOTS` (300) per call and is idempotent, so running it twice is a no-op.
 
 Ranks live in their own file **on purpose**. `syncSeedImport()` replaces the entire live `roster.json` with the sheet-derived seed whenever a newer import ships, so ranks stored there would be silently wiped by the next `npm run import:roster` + deploy. Nothing in the import path touches `ranks.json`. `POST /api/ranks/restore` re-seeds from the repo copy; a rank still assigned to a roster entry can't be deleted (409).
 
@@ -72,7 +76,7 @@ On top of the ladder, `ungrantableFlag()` stops anyone handing out a permission 
 - `GET /api/roster/audit` — requireEdit
 - `PUT/DELETE /api/roster/:id` — requireEdit
 - `GET/POST /api/users`, `PUT/DELETE /api/users/:id` — requireManageUsers + authority ladder
-- `GET /api/ranks` — public; `PUT /api/ranks`, `POST /api/ranks/restore` — requireManageRanks
+- `GET /api/ranks` — public; `PUT /api/ranks`, `POST /api/ranks/slots`, `POST /api/ranks/restore` — requireManageRanks
 - `GET /api/onboarding` — canOnboard or canEditRoster; `PUT/DELETE /api/onboarding/:id` — requireOnboard
 - `POST/DELETE /api/onboarding/:id/callsign` — requireEdit (approve / decline a queued callsign)
 - `GET /api/discord/config`, `GET /api/discord/link`, `GET /api/discord/callback`, `POST /api/discord/unlink` — signed in
