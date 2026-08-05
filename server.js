@@ -1937,6 +1937,7 @@ async function initDataDir() {
   }
   await syncSeedImport();
   await restoreMissingSlots();
+  await repairDetectiveCallsignBlocks();
   await migratePlaintextPasswords();
   await fixStaleVacantFlags();
   await maintainApplications();
@@ -2022,6 +2023,61 @@ async function migratePlaintextPasswords() {
   if (changed) {
     await writeJson(usersPath, data);
     console.log("Migrated plaintext password(s) in users.json to scrypt hashes.");
+  }
+}
+
+// The first build of the rank manager shipped the detective blocks in the 700s,
+// nowhere near where those ranks actually sit on the ladder. ranks.json is only
+// seeded when it's missing, so a volume created by that build would keep the
+// wrong numbers forever — hence a one-off correction rather than a reseed.
+// Only fires when the values are still exactly what that build wrote, so a
+// range someone has since set by hand is left alone.
+const DETECTIVE_BLOCK_FIX = {
+  "Lead Detective": { was: ["730", "734"], now: ["310", "318"] },
+  "Detective 2": { was: ["720", "729"], now: ["328", "334"] },
+  "Detective": { was: ["701", "715"], now: ["335", "341"] }
+};
+
+async function repairDetectiveCallsignBlocks() {
+  let ranksData;
+  try {
+    ranksData = await readJson(ranksPath);
+  } catch {
+    return; // no rank file yet; the seed already has the right numbers
+  }
+  if (!Array.isArray(ranksData.ranks)) return;
+
+  let corrected = false;
+  for (const rank of ranksData.ranks) {
+    const fix = DETECTIVE_BLOCK_FIX[normalizeRankName(rank.name)];
+    if (!fix) continue;
+    if (rank.callsignFrom === fix.was[0] && rank.callsignTo === fix.was[1]) {
+      rank.callsignFrom = fix.now[0];
+      rank.callsignTo = fix.now[1];
+      corrected = true;
+    }
+  }
+  if (corrected) {
+    await writeJson(ranksPath, ranksData);
+    console.log("Corrected detective callsign blocks to sit between Sergeant and Sr. Officer.");
+  }
+
+  // Clear away empty slots the old blocks generated. Strictly limited to
+  // detective ranks, 7xx, and nobody in them — a filled entry is never touched.
+  const roster = await readJson(rosterPath);
+  const before = roster.roster.length;
+  roster.roster = roster.roster.filter((entry) => {
+    const isDetectiveRank = Boolean(DETECTIVE_BLOCK_FIX[normalizeRankName(entry.rank)]);
+    const inOldBlock = /^7\d\d$/.test(String(entry.callsign || "").trim());
+    const empty = !String(entry.name || "").trim() && (entry.vacant || entry.activity === "Vacant");
+    return !(isDetectiveRank && inOldBlock && empty);
+  });
+  const removed = before - roster.roster.length;
+  if (removed) {
+    roster.updatedAt = new Date().toISOString();
+    roster.updatedBy = "system:detective-block-fix";
+    await writeJson(rosterPath, roster);
+    console.log(`Removed ${removed} empty detective slot(s) left in the 700s.`);
   }
 }
 
