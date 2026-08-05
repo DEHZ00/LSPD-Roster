@@ -1149,7 +1149,7 @@ function setDashboardState() {
   // Hide roster entry editor for users who can't edit roster
   $("#entryForm").closest(".dashboard-grid").classList.toggle("hidden", !sessionUser.canEditRoster);
   $("#editNotice").textContent = sessionUser.canEditRoster
-    ? "Changes save to data/roster.json immediately."
+    ? "Changes are saved as soon as you hit Save."
     : "Your account can view the dashboard but cannot edit roster entries.";
   $$("#entryForm input, #entryForm textarea, #entryForm select, #entryForm button").forEach((control) => {
     control.disabled = !sessionUser.canEditRoster;
@@ -1278,18 +1278,82 @@ function callsignsInRange(from, to) {
   return out;
 }
 
+// Callsigns run low-to-high as rank goes high-to-low (101 is the Chief, 6xx is
+// a Recruit), so a rank belongs in the gap between the block above it on the
+// ladder and the block below. This is what stops a new rank getting numbers
+// nowhere near where it actually sits — a Detective landing in the 700s when
+// it belongs between Corporal and Sr. Officer.
+function availableWindow(index) {
+  let above = null;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const rank = rankDraft[i];
+    if (rank.callsignTo) { above = Number(rank.callsignTo); break; }
+  }
+  let below = null;
+  for (let i = index + 1; i < rankDraft.length; i += 1) {
+    const rank = rankDraft[i];
+    if (rank.callsignFrom) { below = Number(rank.callsignFrom); break; }
+  }
+  const from = above === null ? 1 : above + 1;
+  const to = below === null ? null : below - 1;
+  if (to === null || to < from) return null;
+  return { from: String(from), to: String(to), size: to - from + 1 };
+}
+
 function markRankDraftDirty(dirty) {
   rankDraftDirty = dirty;
   $("#rankDirtyNotice").classList.toggle("hidden", !dirty);
 }
 
+// Status line for one rank card. Split out so typing in a callsign box can
+// refresh just that line — re-rendering the whole list would yank focus out of
+// the input mid-keystroke.
+function rankStatusHtml(index, officerCount) {
+  const rank = rankDraft[index];
+  if (!rank) return "";
+  const existing = new Set(
+    rosterData.roster.map((entry) => String(entry.callsign || "").trim()).filter(Boolean)
+  );
+  const block = callsignsInRange(rank.callsignFrom, rank.callsignTo);
+  const missing = block.filter((callsign) => !existing.has(callsign)).length;
+  const gap = availableWindow(index);
+  const people = officerCount
+    ? `<span class="rank-card-people">${officerCount} officer${officerCount === 1 ? "" : "s"}</span>`
+    : `<span class="rank-card-people">nobody yet</span>`;
+
+  if (!block.length) {
+    const hint = gap
+      ? `<span class="rank-status-hint">Free here: <strong>${gap.from}–${gap.to}</strong></span>`
+      : `<span class="rank-status-hint">No callsigns yet</span>`;
+    return hint + people;
+  }
+  // A block outside the window its neighbours leave is how a rank ends up with
+  // numbers nowhere near where it actually sits on the roster.
+  const outOfPlace = gap &&
+    (Number(rank.callsignFrom) < Number(gap.from) || Number(rank.callsignTo) > Number(gap.to));
+  const main = missing
+    ? `<span class="rank-status-warn">${missing} of ${block.length} not created</span>`
+    : `<span class="rank-status-ok">${block.length} callsigns</span>`;
+  const warn = outOfPlace
+    ? `<span class="rank-status-warn">Belongs in ${gap.from}–${gap.to} for this spot</span>`
+    : "";
+  return main + warn + people;
+}
+
 function renderRankManager() {
   if (!canManageRanks()) return;
   if (!rankDraftDirty) rankDraft = rankList.map((rank) => ({ ...rank, aliases: [...(rank.aliases || [])] }));
-  const inUse = new Map();
+  // Two different counts: `slotsAt` is every entry at that rank including
+  // vacant ones (that's what blocks deleting the rank, matching the server),
+  // while `officersAt` is actual people — a vacant slot isn't an officer.
+  const slotsAt = new Map();
+  const officersAt = new Map();
   for (const entry of rosterData.roster) {
     const name = cleanRank(entry.rank).toLowerCase();
-    if (name) inUse.set(name, (inUse.get(name) || 0) + 1);
+    if (!name) continue;
+    slotsAt.set(name, (slotsAt.get(name) || 0) + 1);
+    const vacant = entry.vacant || entry.activity === "Vacant" || !entry.name;
+    if (!vacant) officersAt.set(name, (officersAt.get(name) || 0) + 1);
   }
 
   const existingCallsigns = new Set(
@@ -1297,32 +1361,43 @@ function renderRankManager() {
   );
 
   $("#rankManagerList").innerHTML = rankDraft.map((rank, index) => {
-    const count = inUse.get(rank.name.toLowerCase()) || 0;
+    const key = rank.name.toLowerCase();
+    const count = slotsAt.get(key) || 0;
+    const officers = officersAt.get(key) || 0;
     const block = callsignsInRange(rank.callsignFrom, rank.callsignTo);
     const missing = block.filter((callsign) => !existingCallsigns.has(callsign)).length;
-    const slotNote = block.length
-      ? (missing
-          ? `${missing} of ${block.length} not created yet`
-          : `${block.length} slots ready`)
-      : "no callsigns set";
-    return `<div class="rank-row" data-rank-index="${index}">
-      <span class="rank-row-order">${index + 1}</span>
-      <input class="rank-row-name" value="${escapeHtml(rank.name)}" data-rank-field="name" aria-label="Rank name">
-      <input class="rank-row-category" value="${escapeHtml(rank.category)}" data-rank-field="category" list="rankCategoryOptions" aria-label="Category">
-      <span class="rank-row-callsigns">
-        <input inputmode="numeric" placeholder="from" value="${escapeHtml(rank.callsignFrom || "")}" data-rank-field="callsignFrom" aria-label="Callsign range start">
-        <span class="rank-row-dash">–</span>
-        <input inputmode="numeric" placeholder="to" value="${escapeHtml(rank.callsignTo || "")}" data-rank-field="callsignTo" aria-label="Callsign range end">
-      </span>
-      <span class="rank-row-slotnote${missing ? " needs-slots" : ""}">${escapeHtml(slotNote)}</span>
-      <span class="rank-row-count" title="Officers at this rank">${count}</span>
-      <span class="rank-row-actions">
-        <button type="button" class="secondary" data-rank-slots ${missing && !rankDraftDirty ? "" : "disabled"}
-          title="${rankDraftDirty ? "Save the rank list first" : missing ? `Create ${missing} vacant slot(s)` : "Nothing to create"}">＋ slots</button>
-        <button type="button" class="secondary" data-rank-move="up" ${index === 0 ? "disabled" : ""} aria-label="Move up">▲</button>
-        <button type="button" class="secondary" data-rank-move="down" ${index === rankDraft.length - 1 ? "disabled" : ""} aria-label="Move down">▼</button>
-        <button type="button" class="danger" data-rank-remove ${count ? "disabled" : ""} title="${count ? `${count} officer(s) still hold this rank` : "Remove"}">✕</button>
-      </span>
+    return `<div class="rank-card" data-rank-index="${index}">
+      <div class="rank-card-main">
+        <span class="rank-card-order">${index + 1}</span>
+        <label class="rank-field rank-field-name">
+          <span>Rank</span>
+          <input value="${escapeHtml(rank.name)}" data-rank-field="name">
+        </label>
+        <label class="rank-field rank-field-group">
+          <span>Group</span>
+          <input value="${escapeHtml(rank.category)}" data-rank-field="category" list="rankCategoryOptions">
+        </label>
+        <div class="rank-card-move">
+          <button type="button" class="secondary" data-rank-move="up" ${index === 0 ? "disabled" : ""} aria-label="Move ${escapeHtml(rank.name)} up">▲</button>
+          <button type="button" class="secondary" data-rank-move="down" ${index === rankDraft.length - 1 ? "disabled" : ""} aria-label="Move ${escapeHtml(rank.name)} down">▼</button>
+          <button type="button" class="danger" data-rank-remove ${count ? "disabled" : ""}
+            title="${count ? `${count} roster slot(s) still use this rank` : "Remove this rank"}"
+            aria-label="Remove ${escapeHtml(rank.name)}">✕</button>
+        </div>
+      </div>
+      <div class="rank-card-callsigns">
+        <label class="rank-field">
+          <span>Callsigns</span>
+          <span class="rank-range">
+            <input inputmode="numeric" placeholder="from" value="${escapeHtml(rank.callsignFrom || "")}" data-rank-field="callsignFrom" aria-label="First callsign for ${escapeHtml(rank.name)}">
+            <span class="rank-range-dash">to</span>
+            <input inputmode="numeric" placeholder="to" value="${escapeHtml(rank.callsignTo || "")}" data-rank-field="callsignTo" aria-label="Last callsign for ${escapeHtml(rank.name)}">
+          </span>
+        </label>
+        <div class="rank-card-status">${rankStatusHtml(index, officers)}</div>
+        <button type="button" class="secondary rank-card-create" data-rank-slots ${missing && !rankDraftDirty ? "" : "disabled"}
+          title="${rankDraftDirty ? "Save your changes first" : missing ? `Create ${missing} empty callsign(s)` : "Nothing to create"}">Create callsigns</button>
+      </div>
     </div>`;
   }).join("");
 
@@ -1378,15 +1453,14 @@ function renderDiscordPanel() {
 
   status.innerHTML = `
     <div class="discord-lights">
-      ${light(config.oauthEnabled, "Account linking", config.oauthEnabled ? "Members can connect Discord" : "Set DISCORD_CLIENT_ID / SECRET / REDIRECT_URI")}
-      ${light(config.roleSyncEnabled, "Role → permission sync", config.roleSyncEnabled ? "Mapped roles grant site permissions" : "Also needs DISCORD_GUILD_ID")}
-      ${light(config.botEnabled, "Bot gateway", config.botEnabled ? "Watching rank changes" : "Set DISCORD_BOT_TOKEN to enable")}
-      ${light(config.notifyEnabled, "Channel notifications", config.notifyEnabled ? "Posting rank changes" : "Needs the bot + DISCORD_NOTIFY_CHANNEL_ID")}
+      ${light(config.oauthEnabled, "Account linking", config.oauthEnabled ? "Members can connect Discord" : "Not switched on")}
+      ${light(config.roleSyncEnabled, "Role → permission sync", config.roleSyncEnabled ? "Mapped roles grant site permissions" : "Not switched on")}
+      ${light(config.botEnabled, "Bot", config.botEnabled ? "Watching rank changes" : "Not switched on")}
+      ${light(config.notifyEnabled, "Channel notifications", config.notifyEnabled ? "Posting rank changes" : "Not switched on")}
     </div>
     <p class="notice">
-      Every Discord credential is read from the server environment. There is no
-      field here — or anywhere in this dashboard — that can set or reveal a bot
-      token, and no account, including admin, can change one from the site.
+      Discord is switched on and off by the site owner. Nothing here — for any
+      account, including admin — can change how the site connects to Discord.
       ${config.linked
         ? `Your account is linked to <strong>${escapeHtml(config.linked.username || config.linked.id)}</strong>${
             config.linked.syncedAt ? ` — roles last read ${escapeHtml(new Date(config.linked.syncedAt).toLocaleString())}` : ""
@@ -2710,7 +2784,7 @@ function wireEvents() {
     if (event.target.closest("[data-rank-slots]")) {
       const rank = rankDraft[index];
       const block = callsignsInRange(rank.callsignFrom, rank.callsignTo);
-      if (!confirm(`Create the missing ${rank.name} slots between ${rank.callsignFrom} and ${rank.callsignTo}?\n\nAny callsign in that range that already exists is left alone — nobody gets moved or overwritten.`)) return;
+      if (!confirm(`Create the empty ${rank.name} callsigns between ${rank.callsignFrom} and ${rank.callsignTo}?\n\nAnything already on the roster stays exactly as it is — nobody gets moved.`)) return;
       const button = event.target.closest("[data-rank-slots]");
       button.disabled = true;
       try {
@@ -2721,9 +2795,9 @@ function wireEvents() {
         await loadRoster();
         renderRankManager();
         toast(result.created
-          ? `Created ${result.created} ${rank.name} slot${result.created === 1 ? "" : "s"}${result.skipped ? `, left ${result.skipped} existing alone` : ""}.`
+          ? `Created ${result.created} ${rank.name} callsign${result.created === 1 ? "" : "s"}${result.skipped ? `, left ${result.skipped} existing one${result.skipped === 1 ? "" : "s"} alone` : ""}.`
           : "Every callsign in that range already exists.");
-        if (result.capped) toast(`Range capped at ${MAX_GENERATED_SLOTS} slots per go — run it again for the rest.`);
+        if (result.capped) toast(`That's ${MAX_GENERATED_SLOTS} at a time — press it again for the rest.`);
       } catch (error) {
         toast(error.message);
         renderRankManager();
@@ -2735,8 +2809,19 @@ function wireEvents() {
     const row = event.target.closest("[data-rank-index]");
     const field = event.target.dataset.rankField;
     if (!row || !field) return;
-    rankDraft[Number(row.dataset.rankIndex)][field] = event.target.value;
+    const index = Number(row.dataset.rankIndex);
+    rankDraft[index][field] = event.target.value;
     markRankDraftDirty(true);
+    if (field === "callsignFrom" || field === "callsignTo") {
+      // Every card's window depends on its neighbours' blocks, so refresh them all.
+      $$("#rankManagerList .rank-card").forEach((card) => {
+        const i = Number(card.dataset.rankIndex);
+        const people = Number(card.querySelector(".rank-card-people")?.textContent.split(" ")[0]) || 0;
+        card.querySelector(".rank-card-status").innerHTML = rankStatusHtml(i, people);
+      });
+      // The create button only makes sense once the change is saved.
+      $$("#rankManagerList [data-rank-slots]").forEach((button) => { button.disabled = true; });
+    }
   });
 
   $("#addRankForm").addEventListener("submit", (event) => {
@@ -2751,13 +2836,13 @@ function wireEvents() {
       name,
       category: fields.category.value.trim() || "Other",
       aliases: [],
-      callsignFrom: fields.callsignFrom.value.trim(),
-      callsignTo: fields.callsignTo.value.trim()
+      callsignFrom: "",
+      callsignTo: ""
     });
     markRankDraftDirty(true);
     event.currentTarget.reset();
     renderRankManager();
-    toast("Added — put it in place with ▲▼, Save, then ＋ slots to create its callsigns.");
+    toast(`${name} added at the bottom — move it into place, then set its callsigns.`);
   });
 
   $("#saveRanksBtn").addEventListener("click", saveRanks);

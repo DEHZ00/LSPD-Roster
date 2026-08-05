@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LSPD Roster</title>
     <link rel="icon" type="image/webp" href="/Lspdss.webp">
-    <link rel="stylesheet" href="/styles.css?v=12">
+    <link rel="stylesheet" href="/styles.css?v=13">
   </head>
   <body>
     <header class="topbar">
@@ -538,28 +538,23 @@
               <button id="restoreRanksBtn" type="button" class="secondary">Restore defaults</button>
             </div>
             <p class="notice">
-              Ordered highest to lowest — this is the promotion ladder, and the roster
-              lists ranks in this order. The category is just the heading a rank sits
-              under, so a category can appear in two places if its ranks aren't next to
-              each other (that's how the DCI path works).
-              <br>
-              Give a rank a callsign range, save, then hit <strong>＋ slots</strong> to create
-              its vacant callsigns. It only ever adds numbers that don't exist yet —
-              anything already on the roster is left exactly as it is. Two ranks can't
-              claim the same numbers, and a rank someone still holds can't be removed.
+              Highest rank at the top. Use ▲▼ to move a rank up or down the ladder —
+              the roster lists everyone in this order.
             </p>
             <div class="rank-manager-list" id="rankManagerList"></div>
             <form id="addRankForm" class="rank-add-row">
-              <input name="name" placeholder="New rank name" required>
-              <input name="category" placeholder="Category" list="rankCategoryOptions" required>
+              <label><span>New rank</span><input name="name" placeholder="e.g. Detective" required></label>
+              <label><span>Group</span><input name="category" placeholder="e.g. Detective Bureau" list="rankCategoryOptions" required></label>
               <datalist id="rankCategoryOptions"></datalist>
-              <input name="callsignFrom" inputmode="numeric" placeholder="callsign from">
-              <input name="callsignTo" inputmode="numeric" placeholder="to">
-              <button type="submit">Add rank</button>
+              <button type="submit">Add</button>
             </form>
+            <p class="notice rank-add-hint">
+              New ranks go to the bottom — move them into place, then set their
+              callsigns.
+            </p>
             <div class="button-row">
-              <button id="saveRanksBtn" type="button">Save rank list</button>
-              <span id="rankDirtyNotice" class="notice hidden">Unsaved changes</span>
+              <button id="saveRanksBtn" type="button">Save changes</button>
+              <span id="rankDirtyNotice" class="notice hidden">You have unsaved changes</span>
             </div>
           </section>
 
@@ -656,6 +651,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=23" type="module"></script>
+    <script src="/app.js?v=25" type="module"></script>
   </body>
 </html>

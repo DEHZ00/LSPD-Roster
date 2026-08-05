@@ -81,8 +81,8 @@
       "name": "Lead Detective",
       "category": "Detective Bureau",
       "aliases": [],
-      "callsignFrom": "730",
-      "callsignTo": "734"
+      "callsignFrom": "310",
+      "callsignTo": "318"
     },
     {
       "name": "Corporal",
@@ -97,8 +97,8 @@
       "aliases": [
         "Detective II"
       ],
-      "callsignFrom": "720",
-      "callsignTo": "729"
+      "callsignFrom": "328",
+      "callsignTo": "334"
     },
     {
       "name": "Detective",
@@ -107,8 +107,8 @@
         "Detective 1",
         "Detective I"
       ],
-      "callsignFrom": "701",
-      "callsignTo": "715"
+      "callsignFrom": "335",
+      "callsignTo": "341"
     },
     {
       "name": "Sr. Officer",
