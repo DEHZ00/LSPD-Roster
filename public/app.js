@@ -20,6 +20,43 @@ let pendingClearForPatrolId = null;
 let promoteEntryId = null;
 let activeCategoryFilter = "";
 let entryListQuery = "";
+// Rank list comes from GET /api/ranks (data/ranks.json) so Command can edit it
+// without a deploy. Seeded empty and filled by loadRanks() before first render.
+let rankList = [];
+let discordState = { config: null, settings: { roleMap: [] } };
+
+// ── Permission helpers ──
+// One place per capability, mirroring the server's checks. Reviewing and
+// accepting applications is onboarding work, not roster-editing work — gating
+// it on canEditRoster is exactly the bug this fixes.
+function canReviewApplications() {
+  return Boolean(sessionUser?.canEditRoster || canOnboard());
+}
+
+function canOnboard() {
+  return Boolean(sessionUser?.canOnboard || sessionUser?.role === "admin");
+}
+
+function canManageRanks() {
+  return Boolean(sessionUser?.canManageRanks || sessionUser?.role === "admin");
+}
+
+// Mirrors ROLE_AUTHORITY on the server so the Users panel only offers actions
+// the API will actually allow. The server is still the real guard.
+const ROLE_AUTHORITY = { admin: 3, command: 2, supervisor: 1, onboarding: 1, viewer: 0 };
+
+function authorityOf(user) {
+  if (!user) return -1;
+  if (user.role === "admin") return ROLE_AUTHORITY.admin;
+  const base = ROLE_AUTHORITY[user.role || "viewer"] ?? 0;
+  return user.canManageUsers ? Math.max(base, ROLE_AUTHORITY.command) : base;
+}
+
+function canActOnUser(target) {
+  if (!sessionUser || !target) return false;
+  if (sessionUser.id === target.id) return false;
+  return authorityOf(target) < authorityOf(sessionUser);
+}
 
 // ── Application review signals ──
 // Best-effort, informational-only signals for staff reviewing applications —
@@ -130,12 +167,20 @@ function finalizeTypingSnapshot(name, value) {
 }
 
 // Mirror of the server-side decoder — rebuilds full text at each step.
+// Applications submitted before delta encoding shipped stored whole values as
+// {t, v} rather than {t, k, s}. Decoding those with the delta path gave
+// slice(0, NaN) + undefined — which is why replay on every older application
+// rendered as the literal text "undefined". Fall back to the stored value.
 function decodeTypingSnapshots(snapshots) {
   const values = [];
   let previous = "";
   for (const snap of snapshots) {
-    previous = previous.slice(0, Math.min(snap.k, previous.length)) + snap.s;
-    values.push({ t: snap.t, v: previous });
+    if (typeof snap?.k !== "number" || typeof snap?.s !== "string") {
+      previous = String(snap?.v ?? previous);
+    } else {
+      previous = previous.slice(0, Math.min(snap.k, previous.length)) + snap.s;
+    }
+    values.push({ t: Number(snap?.t) || 0, v: previous });
   }
   return values;
 }
@@ -161,36 +206,37 @@ const STAGE_DECAY_MS = {
 
 let decayTimerInterval = null;
 
-const rankCategories = [
-  {
-    name: "High Command",
-    ranks: ["Commissioner", "Commisioner", "Chief", "Chief Of Police", "Assistant Chief", "Deputy Chief", "Commander"]
-  },
-  {
-    name: "Command",
-    ranks: ["Captain", "Lieutenant"]
-  },
-  {
-    name: "Supervisor",
-    ranks: ["Master Sergeant", "Staff Sergeant", "DCI Staff Sergeant", "Staff Sergeant DCI", "Sergeant"]
-  },
-  {
-    name: "Supervisor In Training",
-    ranks: ["Corporal"]
-  },
-  {
-    name: "Patrol Officer",
-    ranks: ["Sr. Officer", "Officer II", "Officer I"]
-  },
-  {
-    name: "Probationary Officer",
-    ranks: ["Probationary Officer"]
-  },
-  {
-    name: "Officer In Training",
-    ranks: ["Recruit"]
+// Derived from rankList (the API's flat, ordered rank array) rather than
+// hardcoded — same single-source-of-truth rule divisions/strikes follow.
+// A category's ranks don't have to be adjacent in the ladder: Lead Detective
+// sits between Sergeant and Corporal but shares the Detective Bureau card
+// with the detective ranks below Corporal. Category order follows the first
+// appearance of each category in the ladder.
+// Only canonical names go in here — aliases exist so old spellings already in
+// roster.json ("Commisioner", "DCI Staff Sergeant") still land in the right
+// category, but they must never show up as pickable options.
+function buildRankCategories() {
+  const byCategory = new Map();
+  for (const rank of rankList) {
+    const name = rank.category || "Other";
+    if (!byCategory.has(name)) byCategory.set(name, { name, ranks: [] });
+    byCategory.get(name).ranks.push(rank.name);
   }
-];
+  return [...byCategory.values()];
+}
+
+let rankCategories = [];
+
+// Every selectable rank, highest first — what the rank pickers offer.
+function allRankNames() {
+  return rankList.map((rank) => rank.name);
+}
+
+async function loadRanks() {
+  const data = await api("/api/ranks");
+  rankList = data.ranks || [];
+  rankCategories = buildRankCategories();
+}
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -232,9 +278,15 @@ function cleanRank(rank) {
   return String(rank || "").replace(/\s+/g, " ").trim();
 }
 
+// Matches on canonical name or alias, so an entry still recorded under an old
+// spelling keeps its category card instead of falling into "Other".
 function categoryForRank(rank) {
-  const cleaned = cleanRank(rank);
-  return rankCategories.find((category) => category.ranks.some((item) => cleanRank(item) === cleaned))?.name || "Other";
+  const cleaned = cleanRank(rank).toLowerCase();
+  const match = rankList.find(
+    (item) => cleanRank(item.name).toLowerCase() === cleaned ||
+              (item.aliases || []).some((alias) => cleanRank(alias).toLowerCase() === cleaned)
+  );
+  return match?.category || "Other";
 }
 
 function groupedRoster(rows) {
@@ -588,33 +640,6 @@ function entryToForm(entry) {
   $("#rankCallsignHint").classList.toggle("hidden", !editingExisting);
 }
 
-function populateAcceptRankDropdown() {
-  $("#acceptRankPicker").innerHTML = `<option value="Recruit">Recruit</option>`;
-}
-
-function populateAcceptCallsigns(rank) {
-  const picker = $("#acceptCallsignPicker");
-  if (!rank) {
-    picker.innerHTML = `<option value="">— Select rank first —</option>`;
-    picker.disabled = true;
-    return;
-  }
-  const vacant = rosterData.roster.filter(
-    (e) => (e.vacant || e.activity === "Vacant") && cleanRank(e.rank) === cleanRank(rank)
-  );
-  if (vacant.length) {
-    picker.innerHTML = [
-      `<option value="">— Select callsign —</option>`,
-      ...vacant.map(
-        (e) => `<option value="${escapeHtml(e.callsign)}" data-entry-id="${escapeHtml(e.id)}">${escapeHtml(e.callsign)}</option>`
-      )
-    ].join("");
-  } else {
-    picker.innerHTML = `<option value="">No vacant slots for this rank</option>`;
-  }
-  picker.disabled = false;
-}
-
 function formatDuration(ms) {
   const totalSeconds = Math.round(ms / 1000);
   const m = Math.floor(totalSeconds / 60);
@@ -940,12 +965,7 @@ function applicationToAcceptForm(application) {
   currentReviewApplication = application || null;
   $("#expandReviewBtn").classList.toggle("hidden", !application);
   fields.applicationId.value = application?.id || "";
-  fields.vacantEntryId.value = "";
   fields.name.value = application?.name || "";
-  fields.promotionDate.value = new Date().toISOString().split("T")[0];
-  populateAcceptRankDropdown();
-  $("#acceptRankPicker").value = "";
-  populateAcceptCallsigns("");
   $("#acceptFormTitle").textContent = application ? `Accept ${application.name}` : "Accept applicant";
   const appFields = [
     { label: "Age",                value: application?.age },
@@ -969,11 +989,13 @@ function applicationToAcceptForm(application) {
     : `<p class="app-detail-empty">Select a pending application to review it.</p>`;
   $$("#acceptApplicationForm input, #acceptApplicationForm select, #acceptApplicationForm button").forEach((control) => {
     if (control.name === "name") return;
-    if (control.id === "acceptCallsignPicker") return; // managed by rank selection
     // Review stays available after a decision so staff can re-check the
     // replay/signals on an already-accepted or rejected application.
     if (control.id === "expandReviewBtn") return;
-    control.disabled = !application || application.status !== "pending" || !sessionUser?.canEditRoster;
+    // Reviewing is an onboarding job, not a roster-edit job — gating this on
+    // canEditRoster is what stopped onboarding-only staff accepting anyone
+    // even though the server has always allowed it.
+    control.disabled = !application || application.status !== "pending" || !canReviewApplications();
   });
   renderApplications();
 }
@@ -998,11 +1020,13 @@ function formToEntry() {
 }
 
 const ROLE_PERMISSIONS = {
-  viewer:     { canEditRoster: false, canManageUsers: false, canOnboard: false },
-  onboarding: { canEditRoster: false, canManageUsers: false, canOnboard: true  },
-  supervisor: { canEditRoster: true,  canManageUsers: false, canOnboard: false },
-  command:    { canEditRoster: true,  canManageUsers: true,  canOnboard: true  },
-  admin:      { canEditRoster: true,  canManageUsers: true,  canOnboard: true  },
+  viewer:     { canEditRoster: false, canManageUsers: false, canOnboard: false, canManageRanks: false },
+  onboarding: { canEditRoster: false, canManageUsers: false, canOnboard: true,  canManageRanks: false },
+  supervisor: { canEditRoster: true,  canManageUsers: false, canOnboard: false, canManageRanks: false },
+  // Rank management is deliberately off for Command by default — it's granted
+  // per account (High Command) rather than coming free with the role.
+  command:    { canEditRoster: true,  canManageUsers: true,  canOnboard: true,  canManageRanks: false },
+  admin:      { canEditRoster: true,  canManageUsers: true,  canOnboard: true,  canManageRanks: true  },
 };
 
 const ROLE_LABELS = {
@@ -1036,8 +1060,8 @@ function updatePreviewBanner() {
 function setDashboardState() {
   const signedIn = Boolean(sessionUser);
   const isRealAdmin = realSessionUser?.role === "admin" || (!realSessionUser && sessionUser?.role === "admin");
-  const canSeeOnboarding = sessionUser?.canOnboard || sessionUser?.role === "admin";
-  const canSeeApplications = sessionUser?.canEditRoster || sessionUser?.canOnboard || sessionUser?.role === "admin";
+  const canSeeOnboarding = canOnboard();
+  const canSeeApplications = canReviewApplications();
   const canSeeDashboard = signedIn && (sessionUser?.canEditRoster || canSeeApplications);
 
   // Topbar auth area
@@ -1081,6 +1105,9 @@ function setDashboardState() {
   $$("#entryForm input, #entryForm textarea, #entryForm select, #entryForm button").forEach((control) => {
     control.disabled = !sessionUser.canEditRoster;
   });
+  $("#rankAdmin").classList.toggle("hidden", !canManageRanks());
+  $("#discordAdmin").classList.toggle("hidden", !sessionUser.canManageUsers);
+  $("#rosterAudit").classList.toggle("hidden", !sessionUser.canEditRoster);
 }
 
 async function loadRoster() {
@@ -1098,10 +1125,22 @@ async function loadSession() {
   const data = await api("/api/session");
   sessionUser = data.user;
   setDashboardState();
-  if (sessionUser?.canEditRoster || sessionUser?.canOnboard) await loadApplications();
-  if (sessionUser?.canManageUsers) await loadUsers();
-  if (sessionUser?.canOnboard || sessionUser?.role === "admin") await loadOnboarding();
-  if (sessionUser?.canEditRoster || sessionUser?.canManageUsers) await loadBugReports();
+  await loadPermittedData();
+}
+
+// Single place deciding which panels get data for the current permissions.
+// Sign-in, boot, and role preview all go through here — they each used to
+// keep their own copy of this list, and a panel added to one silently stayed
+// empty in the others.
+async function loadPermittedData() {
+  if (!sessionUser) return;
+  if (canReviewApplications()) await loadApplications();
+  if (sessionUser.canManageUsers) await loadUsers();
+  if (canOnboard()) await loadOnboarding();
+  if (sessionUser.canEditRoster || sessionUser.canManageUsers) await loadBugReports();
+  if (canManageRanks()) renderRankManager();
+  if (sessionUser.canManageUsers) await loadDiscordSettings();
+  if (sessionUser.canEditRoster) await loadRosterAudit();
 }
 
 async function loadApplications() {
@@ -1169,6 +1208,180 @@ function renderUsers() {
   `).join("");
 }
 
+// ── Rank Manager ──
+// Edits a working copy of the ladder; nothing reaches the server until Save.
+let rankDraft = [];
+let rankDraftDirty = false;
+
+function markRankDraftDirty(dirty) {
+  rankDraftDirty = dirty;
+  $("#rankDirtyNotice").classList.toggle("hidden", !dirty);
+}
+
+function renderRankManager() {
+  if (!canManageRanks()) return;
+  if (!rankDraftDirty) rankDraft = rankList.map((rank) => ({ ...rank, aliases: [...(rank.aliases || [])] }));
+  const inUse = new Map();
+  for (const entry of rosterData.roster) {
+    const name = cleanRank(entry.rank).toLowerCase();
+    if (name) inUse.set(name, (inUse.get(name) || 0) + 1);
+  }
+
+  $("#rankManagerList").innerHTML = rankDraft.map((rank, index) => {
+    const count = inUse.get(rank.name.toLowerCase()) || 0;
+    return `<div class="rank-row" data-rank-index="${index}">
+      <span class="rank-row-order">${index + 1}</span>
+      <input class="rank-row-name" value="${escapeHtml(rank.name)}" data-rank-field="name" aria-label="Rank name">
+      <input class="rank-row-category" value="${escapeHtml(rank.category)}" data-rank-field="category" list="rankCategoryOptions" aria-label="Category">
+      <span class="rank-row-count" title="Roster entries at this rank">${count}</span>
+      <span class="rank-row-actions">
+        <button type="button" class="secondary" data-rank-move="up" ${index === 0 ? "disabled" : ""} aria-label="Move up">▲</button>
+        <button type="button" class="secondary" data-rank-move="down" ${index === rankDraft.length - 1 ? "disabled" : ""} aria-label="Move down">▼</button>
+        <button type="button" class="danger" data-rank-remove ${count ? "disabled" : ""} title="${count ? `${count} officer(s) still hold this rank` : "Remove"}">✕</button>
+      </span>
+    </div>`;
+  }).join("");
+
+  const categories = [...new Set(rankDraft.map((rank) => rank.category).filter(Boolean))];
+  $("#rankCategoryOptions").innerHTML = categories
+    .map((category) => `<option value="${escapeHtml(category)}"></option>`).join("");
+}
+
+async function saveRanks() {
+  try {
+    const data = await api("/api/ranks", {
+      method: "PUT",
+      body: JSON.stringify({ ranks: rankDraft })
+    });
+    rankList = data.ranks;
+    rankCategories = buildRankCategories();
+    markRankDraftDirty(false);
+    renderRankManager();
+    renderAll();
+    toast("Rank list saved.");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+// ── Discord panel ──
+
+async function loadDiscordSettings() {
+  try {
+    const [config, settings] = await Promise.all([
+      api("/api/discord/config"),
+      api("/api/discord/settings")
+    ]);
+    discordState = { config, settings };
+  } catch {
+    discordState = { config: null, settings: { roleMap: [] } };
+  }
+  renderDiscordPanel();
+}
+
+function renderDiscordPanel() {
+  const config = discordState.config;
+  const status = $("#discordStatus");
+  if (!config) {
+    status.innerHTML = `<p class="notice">Discord status unavailable.</p>`;
+    return;
+  }
+  const light = (on, label, detail) =>
+    `<div class="discord-light ${on ? "on" : "off"}">
+      <span class="discord-light-dot"></span>
+      <div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></div>
+    </div>`;
+
+  status.innerHTML = `
+    <div class="discord-lights">
+      ${light(config.oauthEnabled, "Account linking", config.oauthEnabled ? "Members can connect Discord" : "Set DISCORD_CLIENT_ID / SECRET / REDIRECT_URI")}
+      ${light(config.roleSyncEnabled, "Role → permission sync", config.roleSyncEnabled ? "Mapped roles grant site permissions" : "Also needs DISCORD_GUILD_ID")}
+      ${light(config.botEnabled, "Bot gateway", config.botEnabled ? "Watching rank changes" : "Set DISCORD_BOT_TOKEN to enable")}
+      ${light(config.notifyEnabled, "Channel notifications", config.notifyEnabled ? "Posting rank changes" : "Needs the bot + DISCORD_NOTIFY_CHANNEL_ID")}
+    </div>
+    <p class="notice">
+      Every Discord credential is read from the server environment. There is no
+      field here — or anywhere in this dashboard — that can set or reveal a bot
+      token, and no account, including admin, can change one from the site.
+      ${config.linked
+        ? `Your account is linked to <strong>${escapeHtml(config.linked.username || config.linked.id)}</strong>.
+           <button type="button" id="discordUnlinkBtn" class="link-btn">Unlink</button>`
+        : config.oauthEnabled
+          ? `<button type="button" id="discordLinkBtn" class="link-btn">Connect your Discord</button>`
+          : ""}
+    </p>`;
+
+  const rows = discordState.settings.roleMap || [];
+  $("#discordRoleMap").innerHTML = rows.length
+    ? rows.map((row, index) => `
+      <div class="discord-role-row" data-role-index="${index}">
+        <div class="discord-role-head">
+          <strong>${escapeHtml(row.label || "(unlabelled)")}</strong>
+          <code>${escapeHtml(row.roleId)}</code>
+          <button type="button" class="danger" data-role-remove aria-label="Remove mapping">✕</button>
+        </div>
+        <div class="discord-role-perms">
+          <label class="checkbox"><input type="checkbox" data-role-perm="canEditRoster" ${row.permissions?.canEditRoster ? "checked" : ""}> Edit roster</label>
+          <label class="checkbox"><input type="checkbox" data-role-perm="canManageUsers" ${row.permissions?.canManageUsers ? "checked" : ""}> Manage users</label>
+          <label class="checkbox"><input type="checkbox" data-role-perm="canOnboard" ${row.permissions?.canOnboard ? "checked" : ""}> Onboard</label>
+          <label class="checkbox"><input type="checkbox" data-role-perm="canManageRanks" ${row.permissions?.canManageRanks ? "checked" : ""}> Manage ranks</label>
+          <span class="discord-role-rank">Rank: <strong>${escapeHtml(row.rank || "—")}</strong></span>
+        </div>
+      </div>`).join("")
+    : `<p class="notice">No role mappings yet. Add a Discord role ID below to grant permissions automatically when someone links their account.</p>`;
+
+  $("#addDiscordRoleForm").classList.remove("hidden");
+  $("#saveDiscordBtn").classList.remove("hidden");
+  $("#discordRankOptions").innerHTML = allRankNames()
+    .map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+}
+
+async function saveDiscordSettings() {
+  try {
+    const data = await api("/api/discord/settings", {
+      method: "PUT",
+      body: JSON.stringify({ roleMap: discordState.settings.roleMap })
+    });
+    discordState.settings = data;
+    renderDiscordPanel();
+    toast("Discord role mapping saved.");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+// ── Roster audit log ──
+
+async function loadRosterAudit() {
+  try {
+    const data = await api("/api/roster/audit");
+    renderRosterAudit(data.auditLog || []);
+  } catch {
+    renderRosterAudit([]);
+  }
+}
+
+function renderRosterAudit(log) {
+  if (!log.length) {
+    $("#auditList").innerHTML = `<p class="notice">No roster changes recorded yet.</p>`;
+    return;
+  }
+  $("#auditList").innerHTML = log.map((row) => {
+    const when = new Date(row.at).toLocaleString();
+    const changes = (row.changes || [])
+      .map((change) => `<span class="audit-change">${escapeHtml(change.field)}: <s>${escapeHtml(change.from || "—")}</s> → <strong>${escapeHtml(change.to || "—")}</strong></span>`)
+      .join("");
+    return `<div class="audit-item">
+      <div class="audit-item-head">
+        <strong>${escapeHtml(row.callsign || "—")} ${escapeHtml(row.name || "")}</strong>
+        <span class="audit-action">${escapeHtml(row.action)}</span>
+      </div>
+      <small class="audit-meta">${escapeHtml(row.byName || row.by)} · ${escapeHtml(when)}</small>
+      ${changes ? `<div class="audit-changes">${changes}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
 async function loadOnboarding() {
   const data = await api("/api/onboarding");
   onboardingCards = data.cards;
@@ -1229,6 +1442,7 @@ function renderKanban() {
               const info = cardDecayInfo(card);
               const decayed = info?.decayed ?? false;
               return `<div class="kanban-card${decayed ? " kanban-card-decayed" : ""}" draggable="true" data-card-id="${escapeHtml(card.id)}">
+              <button type="button" class="kanban-card-move" data-move-card="${escapeHtml(card.id)}" aria-label="Move ${escapeHtml(card.name)} to another stage">⇄</button>
               <strong>${escapeHtml(card.name)}</strong>
               <small class="card-discord">${escapeHtml(card.discord)}</small>
               ${card.callsign || card.rank ? `<div class="card-meta">
@@ -1247,6 +1461,16 @@ function renderKanban() {
 
   // Live-update timers every 30s
   decayTimerInterval = setInterval(updateDecayTimers, 30000);
+
+  // HTML5 drag-and-drop doesn't fire on touch devices at all, so the board was
+  // unusable on a phone. This sheet is the touch path — same destinations, same
+  // Academy Passed / Cleared For Patrol prompts, no dragging required.
+  $$("[data-move-card]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openStagePicker(button.dataset.moveCard);
+    });
+  });
 
   // Drag events on cards
   $$(".kanban-card").forEach((card) => {
@@ -1272,28 +1496,49 @@ function renderKanban() {
     zone.addEventListener("drop", async (e) => {
       e.preventDefault();
       zone.classList.remove("drag-over");
-      const cardId = e.dataTransfer.getData("text/plain");
-      const targetStage = zone.dataset.stage;
-      const card = onboardingCards.find((c) => c.id === cardId);
-      if (!card || card.stage === targetStage) return;
-
-      if (targetStage === "Academy Passed") {
-        pendingAcademyCardId = cardId;
-        populateAcademyRankDropdown();
-        $("#academyPassedModal").classList.remove("hidden");
-        return;
-      }
-
-      if (targetStage === "Cleared For Patrol") {
-        pendingClearForPatrolId = cardId;
-        $("#clearForPatrolName").textContent = card.name || "this recruit";
-        $("#clearForPatrolModal").classList.remove("hidden");
-        return;
-      }
-
-      await moveOnboardingCard(cardId, targetStage);
+      await requestStageMove(e.dataTransfer.getData("text/plain"), zone.dataset.stage);
     });
   });
+}
+
+// Stage picker used by the touch path. Routes through requestStageMove so the
+// Academy Passed and Cleared For Patrol prompts behave identically whether the
+// card was dragged or tapped.
+function openStagePicker(cardId) {
+  const card = onboardingCards.find((item) => item.id === cardId);
+  if (!card) return;
+  $("#stagePickerName").textContent = card.name || "this recruit";
+  $("#stagePickerOptions").innerHTML = onboardingStages
+    .map((stage) => `<button type="button" class="stage-option${stage === card.stage ? " current" : ""}"
+        data-stage-target="${escapeHtml(stage)}" ${stage === card.stage ? "disabled" : ""}>
+        ${escapeHtml(stage)}${stage === card.stage ? " (current)" : ""}
+      </button>`)
+    .join("") +
+    `<button type="button" class="stage-option danger" data-stage-target="__terminate__">Terminate employee</button>`;
+  $("#stagePickerModal").dataset.cardId = cardId;
+  $("#stagePickerModal").classList.remove("hidden");
+}
+
+// Shared by drag-drop and the stage picker.
+async function requestStageMove(cardId, targetStage) {
+  const card = onboardingCards.find((item) => item.id === cardId);
+  if (!card || card.stage === targetStage) return;
+
+  if (targetStage === "Academy Passed") {
+    pendingAcademyCardId = cardId;
+    populateAcademyRankDropdown();
+    $("#academyPassedModal").classList.remove("hidden");
+    return;
+  }
+
+  if (targetStage === "Cleared For Patrol") {
+    pendingClearForPatrolId = cardId;
+    $("#clearForPatrolName").textContent = card.name || "this recruit";
+    $("#clearForPatrolModal").classList.remove("hidden");
+    return;
+  }
+
+  await moveOnboardingCard(cardId, targetStage);
 }
 
 async function moveOnboardingCard(cardId, stage, extra = {}) {
@@ -1383,6 +1628,28 @@ function userToForm(user = {}) {
   fields.canEditRoster.checked = Boolean(user.canEditRoster);
   fields.canManageUsers.checked = Boolean(user.canManageUsers);
   fields.canOnboard.checked = Boolean(user.canOnboard);
+  fields.canManageRanks.checked = Boolean(user.canManageRanks);
+
+  // Mirror the server's authority ladder: an existing account at or above your
+  // own level is read-only here, and your own permissions are never editable.
+  const existing = user.id ? user : null;
+  const isSelf = existing && sessionUser?.id === existing.id;
+  const locked = Boolean(existing) && !canActOnUser(existing);
+  const notice = $("#userFormNotice");
+  notice.classList.toggle("hidden", !locked && !isSelf);
+  if (isSelf) {
+    notice.textContent = "This is your own account — you can change your name, email, and password, but not your own permissions.";
+  } else if (locked) {
+    notice.textContent = "This account is at or above your permission level. You can't edit or remove it.";
+  }
+
+  for (const name of ["role", "canEditRoster", "canManageUsers", "canOnboard", "canManageRanks"]) {
+    fields[name].disabled = locked || isSelf;
+  }
+  for (const name of ["name", "email", "password"]) {
+    fields[name].disabled = locked;
+  }
+  $("#deleteUserButton").classList.toggle("hidden", !existing || locked);
 }
 
 function switchApplyTab(tab) {
@@ -1452,9 +1719,9 @@ function showView(view) {
   $("#applyView").classList.toggle("hidden", view !== "apply");
   $("#dashboardView").classList.toggle("hidden", view !== "dashboard");
   $("#onboardingView").classList.toggle("hidden", view !== "onboarding");
-  if (view === "onboarding" && (sessionUser?.canOnboard || sessionUser?.role === "admin")) {
+  if (view === "onboarding" && (canOnboard())) {
     loadOnboarding();
-    if (sessionUser?.canEditRoster || sessionUser?.canOnboard) loadApplications();
+    if (canReviewApplications()) loadApplications();
   }
   closeMobileNav();
   // Keep the URL hash in sync so refresh stays on the current tab
@@ -1482,6 +1749,33 @@ function wireEvents() {
     pendingTerminationId = cardId;
     $("#terminateName").textContent = card.name;
     $("#terminateModal").classList.remove("hidden");
+  });
+
+  const stagePicker = $("#stagePickerModal");
+  const closeStagePicker = () => {
+    stagePicker.classList.add("hidden");
+    delete stagePicker.dataset.cardId;
+  };
+  $("#stagePickerCancelBtn").addEventListener("click", closeStagePicker);
+  stagePicker.addEventListener("click", (event) => {
+    if (event.target === stagePicker) closeStagePicker();
+  });
+  $("#stagePickerOptions").addEventListener("click", async (event) => {
+    const option = event.target.closest("[data-stage-target]");
+    if (!option) return;
+    const cardId = stagePicker.dataset.cardId;
+    const target = option.dataset.stageTarget;
+    closeStagePicker();
+    if (!cardId) return;
+    if (target === "__terminate__") {
+      const card = onboardingCards.find((item) => item.id === cardId);
+      if (!card) return;
+      pendingTerminationId = cardId;
+      $("#terminateName").textContent = card.name;
+      $("#terminateModal").classList.remove("hidden");
+      return;
+    }
+    await requestStageMove(cardId, target);
   });
 
   $$(".apply-tab").forEach((button) => {
@@ -1608,7 +1902,7 @@ function wireEvents() {
       await api(`/api/onboarding/${encodeURIComponent(id)}`, { method: "DELETE" });
       await loadRoster();
       await loadOnboarding();
-      if (sessionUser?.canEditRoster || sessionUser?.canOnboard) await loadApplications();
+      if (canReviewApplications()) await loadApplications();
       toast("Employee terminated and removed from roster.");
     } catch (err) {
       toast(err.message);
@@ -1707,7 +2001,7 @@ function wireEvents() {
       updateSubmitState();
       resetApplicationSignals();
       showApplicationStatus(next.application);
-      if (sessionUser?.canEditRoster || sessionUser?.canOnboard) await loadApplications();
+      if (canReviewApplications()) await loadApplications();
       toast("Application submitted.");
     } catch (error) {
       $("#applicationNotice").textContent = error.message;
@@ -1820,10 +2114,7 @@ function wireEvents() {
     $("#loginForm").reset();
     $("#registerForm").reset();
     setDashboardState();
-    if (sessionUser.canEditRoster || sessionUser.canOnboard) await loadApplications();
-    if (sessionUser.canManageUsers) await loadUsers();
-    if (sessionUser.canOnboard || sessionUser.role === "admin") await loadOnboarding();
-    if (sessionUser.canEditRoster || sessionUser.canManageUsers) await loadBugReports();
+    await loadPermittedData();
     showView("dashboard");
     toast(`Welcome, ${sessionUser.name}.`);
   }
@@ -1974,19 +2265,6 @@ function wireEvents() {
     }
   });
 
-  $("#acceptRankPicker").addEventListener("change", () => {
-    const rank = $("#acceptRankPicker").value;
-    populateAcceptCallsigns(rank);
-    $("#acceptApplicationForm").elements.vacantEntryId.value = "";
-  });
-
-  $("#acceptCallsignPicker").addEventListener("change", () => {
-    const select = $("#acceptCallsignPicker");
-    const selectedOption = select.options[select.selectedIndex];
-    const entryId = selectedOption?.dataset.entryId || "";
-    $("#acceptApplicationForm").elements.vacantEntryId.value = entryId;
-  });
-
   $("#entrySearch").addEventListener("input", (e) => {
     entryListQuery = e.target.value;
     renderEntryList();
@@ -2001,28 +2279,18 @@ function wireEvents() {
 
   $("#acceptApplicationForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!sessionUser?.canEditRoster) return toast("No edit permission.");
-    const form = event.currentTarget;
-    const fields = form.elements;
-    const id = fields.applicationId.value;
+    if (!canReviewApplications()) return toast("No permission to review applications.");
+    const id = event.currentTarget.elements.applicationId.value;
     if (!id) return toast("Select an application first.");
     try {
-      const callsignSelect = $("#acceptCallsignPicker");
-      const callsign = callsignSelect.value;
-      const result = await api(`/api/applications/${encodeURIComponent(id)}/accept`, {
+      // No callsign or rank here any more — accepting just moves them into the
+      // pipeline. Rank and callsign are chosen together at Academy Passed.
+      await api(`/api/applications/${encodeURIComponent(id)}/accept`, {
         method: "POST",
-        body: JSON.stringify({
-          callsign,
-          rank: fields.rank.value || "Cadet",
-          promotionDate: fields.promotionDate.value,
-          vacantEntryId: fields.vacantEntryId.value
-        })
+        body: JSON.stringify({})
       });
-      selectedEntryId = result.rosterEntry.id;
-      await loadRoster();
-      await loadApplications();
-      entryToForm(result.rosterEntry);
-      toast("Application accepted and cadet added.");
+      await Promise.all([loadApplications(), loadOnboarding()]);
+      toast("Accepted — moved to the recruit pipeline.");
     } catch (error) {
       toast(error.message);
     }
@@ -2171,6 +2439,123 @@ function wireEvents() {
     }
   });
 
+  // ── Rank Manager ──
+  $("#rankManagerList").addEventListener("click", (event) => {
+    const row = event.target.closest("[data-rank-index]");
+    if (!row) return;
+    const index = Number(row.dataset.rankIndex);
+    const move = event.target.closest("[data-rank-move]")?.dataset.rankMove;
+    if (move) {
+      const target = move === "up" ? index - 1 : index + 1;
+      if (target < 0 || target >= rankDraft.length) return;
+      [rankDraft[index], rankDraft[target]] = [rankDraft[target], rankDraft[index]];
+      markRankDraftDirty(true);
+      renderRankManager();
+      return;
+    }
+    if (event.target.closest("[data-rank-remove]")) {
+      rankDraft.splice(index, 1);
+      markRankDraftDirty(true);
+      renderRankManager();
+    }
+  });
+
+  $("#rankManagerList").addEventListener("input", (event) => {
+    const row = event.target.closest("[data-rank-index]");
+    const field = event.target.dataset.rankField;
+    if (!row || !field) return;
+    rankDraft[Number(row.dataset.rankIndex)][field] = event.target.value;
+    markRankDraftDirty(true);
+  });
+
+  $("#addRankForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const fields = event.currentTarget.elements;
+    const name = fields.name.value.trim();
+    if (!name) return;
+    if (rankDraft.some((rank) => rank.name.toLowerCase() === name.toLowerCase())) {
+      return toast("That rank already exists.");
+    }
+    rankDraft.push({ name, category: fields.category.value.trim() || "Other", aliases: [] });
+    markRankDraftDirty(true);
+    event.currentTarget.reset();
+    renderRankManager();
+    toast("Added — drag it into place with ▲▼, then Save.");
+  });
+
+  $("#saveRanksBtn").addEventListener("click", saveRanks);
+
+  $("#restoreRanksBtn").addEventListener("click", async () => {
+    if (!confirm("Restore the default rank list? Any custom ranks you added will be removed.")) return;
+    try {
+      const data = await api("/api/ranks/restore", { method: "POST" });
+      rankList = data.ranks;
+      rankCategories = buildRankCategories();
+      markRankDraftDirty(false);
+      renderRankManager();
+      renderAll();
+      toast("Default ranks restored.");
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+
+  // ── Discord ──
+  $("#refreshDiscordBtn").addEventListener("click", loadDiscordSettings);
+  $("#saveDiscordBtn").addEventListener("click", saveDiscordSettings);
+
+  $("#discordStatus").addEventListener("click", async (event) => {
+    if (event.target.id === "discordLinkBtn") {
+      try {
+        const { url } = await api("/api/discord/link");
+        window.location.href = url;
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+    if (event.target.id === "discordUnlinkBtn") {
+      try {
+        await api("/api/discord/unlink", { method: "POST" });
+        await loadDiscordSettings();
+        toast("Discord unlinked.");
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+  });
+
+  $("#discordRoleMap").addEventListener("change", (event) => {
+    const row = event.target.closest("[data-role-index]");
+    const perm = event.target.dataset.rolePerm;
+    if (!row || !perm) return;
+    const entry = discordState.settings.roleMap[Number(row.dataset.roleIndex)];
+    entry.permissions = { ...entry.permissions, [perm]: event.target.checked };
+  });
+
+  $("#discordRoleMap").addEventListener("click", (event) => {
+    const row = event.target.closest("[data-role-index]");
+    if (!row || !event.target.closest("[data-role-remove]")) return;
+    discordState.settings.roleMap.splice(Number(row.dataset.roleIndex), 1);
+    renderDiscordPanel();
+  });
+
+  $("#addDiscordRoleForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const fields = event.currentTarget.elements;
+    const roleId = fields.roleId.value.trim();
+    if (!/^\d{5,25}$/.test(roleId)) return toast("That doesn't look like a Discord role ID.");
+    discordState.settings.roleMap.push({
+      roleId,
+      label: fields.label.value.trim(),
+      rank: fields.rank.value.trim(),
+      permissions: { canEditRoster: false, canManageUsers: false, canOnboard: false, canManageRanks: false }
+    });
+    event.currentTarget.reset();
+    renderDiscordPanel();
+  });
+
+  $("#refreshAuditBtn").addEventListener("click", loadRosterAudit);
+
   $("#userList").addEventListener("click", (event) => {
     const button = event.target.closest("[data-user-id]");
     if (!button) return;
@@ -2187,6 +2572,23 @@ function wireEvents() {
     fields.canEditRoster.checked  = perms.canEditRoster;
     fields.canManageUsers.checked = perms.canManageUsers;
     fields.canOnboard.checked     = perms.canOnboard;
+    fields.canManageRanks.checked = perms.canManageRanks;
+  });
+
+  $("#deleteUserButton").addEventListener("click", async () => {
+    const fields = $("#userForm").elements;
+    const id = fields.id.value;
+    const target = users.find((user) => user.id === id);
+    if (!target) return;
+    if (!confirm(`Delete ${target.name} (${target.email})? They lose access immediately. This cannot be undone.`)) return;
+    try {
+      await api(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadUsers();
+      userToForm();
+      toast("User deleted.");
+    } catch (error) {
+      toast(error.message);
+    }
   });
 
   $("#userForm").addEventListener("submit", async (event) => {
@@ -2201,7 +2603,8 @@ function wireEvents() {
       role: fields.role.value,
       canEditRoster: fields.canEditRoster.checked,
       canManageUsers: fields.canManageUsers.checked,
-      canOnboard: fields.canOnboard.checked
+      canOnboard: fields.canOnboard.checked,
+      canManageRanks: fields.canManageRanks.checked
     };
     try {
       if (payload.id) {
@@ -2219,6 +2622,8 @@ function wireEvents() {
 }
 
 wireEvents();
+// Ranks first — the roster render groups entries by rank category.
+await loadRanks();
 await loadRoster();
 entryToForm(null);
 await loadSession();
@@ -2228,7 +2633,7 @@ if (hashView === "apply") {
   showView("apply");
 } else if (hashView === "dashboard" && sessionUser?.canEditRoster) {
   showView("dashboard");
-} else if (hashView === "onboarding" && (sessionUser?.canOnboard || sessionUser?.role === "admin")) {
+} else if (hashView === "onboarding" && (canOnboard())) {
   showView("onboarding");
 }
 await checkSavedApplicationStatus();

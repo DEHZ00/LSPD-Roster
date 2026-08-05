@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildAuthorizeUrl, defaultDiscordSettings, diffMappedRoles, discordConfig,
+  exchangeCode, featureSwitches, fetchGuildRoles, fetchIdentity,
+  permissionsForRoles, sanitizeDiscordSettings, sendChannelMessage, startBot
+} from "./discord.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
@@ -13,6 +18,14 @@ const usersPath = path.join(dataDir, "users.json");
 const applicationsPath = path.join(dataDir, "applications.json");
 const onboardingPath = path.join(dataDir, "onboarding.json");
 const bugsPath = path.join(dataDir, "bugs.json");
+// Ranks deliberately live in their own file rather than inside roster.json:
+// syncSeedImport() replaces the whole live roster with the sheet-derived seed
+// whenever a newer import ships, which would silently wipe any rank Command
+// added through the Rank Manager. Nothing in the import path touches this file.
+const ranksPath = path.join(dataDir, "ranks.json");
+// Role-to-permission mapping only. Deliberately contains no credentials —
+// every Discord secret is read from the environment (see discord.js).
+const discordPath = path.join(dataDir, "discord.json");
 const port = Number(process.env.PORT || 3000);
 const sessions = new Map();
 
@@ -75,6 +88,50 @@ async function writeJson(filePath, payload) {
   await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
+const ROSTER_AUDIT_LIMIT = 500;
+// Fields worth reporting a before/after for. Deliberately excludes
+// employeeNotes so the audit trail doesn't become a second copy of private
+// notes for anyone who can read the log.
+const ROSTER_AUDIT_FIELDS = [
+  "callsign", "name", "rank", "activity", "promotionDate", "tig", "clearedForPatrol"
+];
+
+function rosterDiff(before = {}, after = {}) {
+  const changes = [];
+  for (const field of ROSTER_AUDIT_FIELDS) {
+    const from = before[field] ?? "";
+    const to = after[field] ?? "";
+    if (String(from) !== String(to)) changes.push({ field, from: String(from), to: String(to) });
+  }
+  for (const group of ["divisions", "strikes"]) {
+    const keys = new Set([...Object.keys(before[group] || {}), ...Object.keys(after[group] || {})]);
+    for (const key of keys) {
+      const from = Boolean(before[group]?.[key]);
+      const to = Boolean(after[group]?.[key]);
+      if (from !== to) changes.push({ field: `${group}.${key}`, from: String(from), to: String(to) });
+    }
+  }
+  return changes;
+}
+
+// Appends to the roster's own audit trail. Kept inside roster.json (rather
+// than a new file) so it rides the same write lock as the change it records
+// and can never disagree with it — but stripped from the public GET.
+function recordRosterAudit(rosterData, actor, action, entry, changes = []) {
+  const log = Array.isArray(rosterData.auditLog) ? rosterData.auditLog : [];
+  log.unshift({
+    at: new Date().toISOString(),
+    by: actor?.email || "system",
+    byName: actor?.name || "",
+    action,
+    entryId: entry?.id || "",
+    callsign: entry?.callsign || "",
+    name: entry?.name || "",
+    changes
+  });
+  rosterData.auditLog = log.slice(0, ROSTER_AUDIT_LIMIT);
+}
+
 function send(res, status, payload, headers = {}) {
   const body = typeof payload === "string" ? payload : JSON.stringify(payload);
   res.writeHead(status, {
@@ -132,15 +189,25 @@ async function currentUser(req) {
   return users.find((user) => user.id === session.userId) || null;
 }
 
+// Admins hold every permission regardless of what their record stores. This
+// used to be applied only in publicUser(), so the dashboard showed an admin
+// full controls while requireEdit/requireManageUsers read the raw (unchecked)
+// flags and answered 403 — permissions had to agree in both places.
+function effectivePermissions(user) {
+  if (!user) return null;
+  if (user.role !== "admin") return user;
+  return {
+    ...user,
+    canEditRoster: true,
+    canManageUsers: true,
+    canOnboard: true,
+    canManageRanks: true
+  };
+}
+
 function publicUser(user) {
   if (!user) return null;
-  const { password, ...safe } = user;
-  // Admins always get all permissions regardless of what's stored in the file
-  if (safe.role === "admin") {
-    safe.canEditRoster = true;
-    safe.canManageUsers = true;
-    safe.canOnboard = true;
-  }
+  const { password, ...safe } = effectivePermissions(user);
   return safe;
 }
 
@@ -154,7 +221,7 @@ function requireUser(user, res) {
 
 function requireEdit(user, res) {
   if (!requireUser(user, res)) return false;
-  if (!user.canEditRoster) {
+  if (!effectivePermissions(user).canEditRoster) {
     send(res, 403, { error: "You do not have roster edit permission." });
     return false;
   }
@@ -163,17 +230,63 @@ function requireEdit(user, res) {
 
 function requireManageUsers(user, res) {
   if (!requireUser(user, res)) return false;
-  if (!user.canManageUsers) {
+  if (!effectivePermissions(user).canManageUsers) {
     send(res, 403, { error: "Admin user management permission required." });
     return false;
   }
   return true;
 }
 
+function requireManageRanks(user, res) {
+  if (!requireUser(user, res)) return false;
+  if (!effectivePermissions(user).canManageRanks) {
+    send(res, 403, { error: "Rank management permission required." });
+    return false;
+  }
+  return true;
+}
+
+// Authority ladder for the Users panel. You may only delete, or change the
+// permissions of, an account strictly below your own level — so Command can
+// clean up officers and onboarding staff but cannot touch an admin, cannot
+// touch a fellow Command account, and cannot promote themselves. Enforced
+// here rather than only in the UI, since the UI is just a suggestion.
+const ROLE_AUTHORITY = { admin: 3, command: 2, supervisor: 1, onboarding: 1, viewer: 0 };
+
+function authorityOf(user) {
+  if (!user) return -1;
+  if (user.role === "admin") return ROLE_AUTHORITY.admin;
+  const base = ROLE_AUTHORITY[String(user.role || "viewer")] ?? 0;
+  // A viewer-role account holding manage-users still outranks plain viewers,
+  // otherwise a hand-edited record could end up unable to manage anyone.
+  return user.canManageUsers ? Math.max(base, ROLE_AUTHORITY.command) : base;
+}
+
+// Returns an error string when `actor` may not act on `target`, else null.
+// Editing your own account is allowed (password, display name) — what's
+// blocked is changing your own role or permission flags, checked separately
+// by samePermissions() so nobody can promote themselves.
+function targetOutOfReach(actor, target, { allowSelf = false } = {}) {
+  if (actor.id === target.id) {
+    return allowSelf ? null : "You cannot do this to your own account.";
+  }
+  if (authorityOf(target) >= authorityOf(actor)) {
+    return "You cannot modify an account at or above your own permission level.";
+  }
+  return null;
+}
+
+const PERMISSION_FIELDS = ["role", "canEditRoster", "canManageUsers", "canOnboard", "canManageRanks"];
+
+function samePermissions(a, b) {
+  return PERMISSION_FIELDS.every((field) => String(a?.[field] ?? "") === String(b?.[field] ?? ""));
+}
+
 // Who may read/act on applications — the same rule the application routes
 // were each repeating inline.
 function canReviewApplications(user) {
-  return Boolean(user && (user.canEditRoster || user.canOnboard || user.role === "admin"));
+  const perms = effectivePermissions(user);
+  return Boolean(perms && (perms.canEditRoster || perms.canOnboard));
 }
 
 function requireReviewApplications(user, res) {
@@ -186,7 +299,7 @@ function requireReviewApplications(user, res) {
 
 function requireOnboard(user, res) {
   if (!requireUser(user, res)) return false;
-  if (!user.canOnboard && user.role !== "admin") {
+  if (!effectivePermissions(user).canOnboard) {
     send(res, 403, { error: "Onboarding permission required." });
     return false;
   }
@@ -233,8 +346,108 @@ function sanitizeUser(input, existing = {}) {
     role: String(input.role || existing.role || "viewer").trim(),
     canEditRoster: Boolean(input.canEditRoster),
     canManageUsers: Boolean(input.canManageUsers),
-    canOnboard: Boolean(input.canOnboard)
+    canOnboard: Boolean(input.canOnboard),
+    canManageRanks: Boolean(input.canManageRanks),
+    discord: sanitizeDiscordLink(input.discord ?? existing.discord)
   };
+}
+
+// Discord identity attached to an account by OAuth linking. Stored on the user
+// record; never includes a token — see discord.js for why credentials stay in
+// the environment only.
+function sanitizeDiscordLink(input) {
+  if (!input || typeof input !== "object") return null;
+  const id = String(input.id || "").trim();
+  if (!/^\d{5,25}$/.test(id)) return null;
+  return {
+    id,
+    username: String(input.username || "").trim().slice(0, 64),
+    globalName: String(input.globalName || "").trim().slice(0, 64),
+    roleIds: Array.isArray(input.roleIds)
+      ? input.roleIds.map((r) => String(r).trim()).filter((r) => /^\d{5,25}$/.test(r)).slice(0, 100)
+      : [],
+    linkedAt: String(input.linkedAt || new Date().toISOString()),
+    syncedAt: input.syncedAt ? String(input.syncedAt) : null
+  };
+}
+
+// In-memory, like sessions — a pending OAuth handshake is worthless after a
+// restart and shouldn't outlive one.
+const oauthStates = new Map();
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+async function readDiscordSettings() {
+  try {
+    const data = await readJson(discordPath);
+    return { ...defaultDiscordSettings(), ...data, ...sanitizeDiscordSettings(data) };
+  } catch {
+    return defaultDiscordSettings();
+  }
+}
+
+// Applies mapped Discord roles to a user record in place. Never touches
+// `role`, so a Discord role can grant permissions but can never mint a site
+// admin — that stays a deliberate human action.
+async function applyDiscordPermissions(userRecord, roleIds) {
+  if (!featureSwitches().permissionSync) return false;
+  const settings = await readDiscordSettings();
+  const { matched, permissions } = permissionsForRoles(roleIds, settings);
+  if (!matched) return false;
+  Object.assign(userRecord, permissions);
+  return true;
+}
+
+// The rank list is a flat, ordered array — highest authority first. Order is
+// the promotion path; `category` is only the grouping label the public roster
+// renders cards for, so a category's ranks don't have to be contiguous (Lead
+// Detective sits between Sergeant and Corporal while sharing the Detective
+// Bureau card with the ranks below Corporal).
+function normalizeRankName(rank) {
+  return String(rank || "").replace(/\s+/g, " ").trim();
+}
+
+function sanitizeRankList(input) {
+  const seen = new Set();
+  const ranks = [];
+  for (const raw of Array.isArray(input) ? input.slice(0, 100) : []) {
+    const name = normalizeRankName(typeof raw === "string" ? raw : raw?.name).slice(0, 60);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ranks.push({
+      name,
+      category: normalizeRankName(raw?.category).slice(0, 60) || "Other",
+      aliases: Array.isArray(raw?.aliases)
+        ? [...new Set(raw.aliases.map((a) => normalizeRankName(a).slice(0, 60)).filter(Boolean))].slice(0, 20)
+        : []
+    });
+  }
+  return ranks;
+}
+
+async function readRanks() {
+  try {
+    const data = await readJson(ranksPath);
+    const ranks = sanitizeRankList(data.ranks);
+    if (ranks.length) return { ...data, ranks };
+  } catch {
+    // fall through to the seed below
+  }
+  return { ranks: sanitizeRankList(JSON.parse(await fs.readFile(path.join(seedDir, "ranks.json"), "utf8")).ranks) };
+}
+
+// A rank a roster entry still uses can't be deleted out from under it, or the
+// entry drops into the "Other" bucket and stops appearing under any category
+// card on the public roster.
+function ranksInUse(rosterEntries) {
+  const used = new Map();
+  for (const entry of rosterEntries) {
+    const name = normalizeRankName(entry.rank);
+    if (!name) continue;
+    used.set(name.toLowerCase(), (used.get(name.toLowerCase()) || 0) + 1);
+  }
+  return used;
 }
 
 const KNOWN_APPLICATION_FIELDS = ["roleplayPhilosophy", "characterDescription", "leoExperience", "bannedHistory", "clips"];
@@ -264,23 +477,48 @@ function sanitizeTypingReplay(input) {
   for (const field of KNOWN_APPLICATION_FIELDS) {
     const snapshots = input[field];
     if (!Array.isArray(snapshots)) continue;
-    const cleaned = snapshots.slice(0, MAX_TYPING_SNAPSHOTS).map((snap) => ({
-      t: clampInt(snap?.t, 0, 86400000),
-      k: clampInt(snap?.k, 0, MAX_TYPING_VALUE_LENGTH),
-      s: String(snap?.s ?? "").slice(0, MAX_TYPING_CHUNK_LENGTH)
-    }));
+    // Legacy {t, v} snapshots (pre delta-encoding) are converted rather than
+    // clamped to empty, so re-saving an old application doesn't wipe its replay.
+    let previous = "";
+    const cleaned = snapshots.slice(0, MAX_TYPING_SNAPSHOTS).map((snap) => {
+      const legacy = typeof snap?.k !== "number" || typeof snap?.s !== "string";
+      if (legacy) {
+        const value = String(snap?.v ?? "").slice(0, MAX_TYPING_VALUE_LENGTH);
+        let shared = 0;
+        while (shared < previous.length && shared < value.length && previous[shared] === value[shared]) shared += 1;
+        previous = value;
+        return {
+          t: clampInt(snap?.t, 0, 86400000),
+          k: shared,
+          s: value.slice(shared, shared + MAX_TYPING_CHUNK_LENGTH)
+        };
+      }
+      const k = clampInt(snap.k, 0, MAX_TYPING_VALUE_LENGTH);
+      const s = snap.s.slice(0, MAX_TYPING_CHUNK_LENGTH);
+      previous = previous.slice(0, Math.min(k, previous.length)) + s;
+      return { t: clampInt(snap?.t, 0, 86400000), k, s };
+    });
     if (cleaned.length) result[field] = cleaned;
   }
   return result;
 }
 
-// Rebuilds the full text at each step from the deltas.
+// Rebuilds the full text at each step from the deltas. Applications submitted
+// before delta encoding shipped stored the whole value as {t, v} instead of
+// {t, k, s}; those decoded to the literal string "undefined" (k undefined ->
+// slice(0, NaN) -> "", plus an undefined chunk), so replay for every older
+// application rendered as "undefined". Fall back to the full value when a
+// snapshot has no delta fields.
 function decodeTypingSnapshots(snapshots) {
   const values = [];
   let prev = "";
   for (const snap of snapshots) {
-    prev = prev.slice(0, Math.min(snap.k, prev.length)) + snap.s;
-    values.push({ t: snap.t, v: prev });
+    if (typeof snap?.k !== "number" || typeof snap?.s !== "string") {
+      prev = String(snap?.v ?? prev);
+    } else {
+      prev = prev.slice(0, Math.min(snap.k, prev.length)) + snap.s;
+    }
+    values.push({ t: Number(snap?.t) || 0, v: prev });
   }
   return values;
 }
@@ -469,8 +707,17 @@ async function handleApi(req, res) {
   const user = await currentUser(req);
 
   if (req.method === "GET" && url.pathname === "/api/roster") {
-    const roster = await readJson(rosterPath);
+    // This route is public — the audit trail (who changed what, with emails)
+    // is staff-only and is served separately by /api/roster/audit.
+    const { auditLog, ...roster } = await readJson(rosterPath);
     send(res, 200, roster);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/roster/audit") {
+    if (!requireEdit(user, res)) return;
+    const data = await readJson(rosterPath);
+    send(res, 200, { auditLog: (data.auditLog || []).slice(0, 200) });
     return;
   }
 
@@ -584,15 +831,20 @@ async function handleApi(req, res) {
         };
         data.updatedAt = new Date().toISOString();
         data.updatedBy = user.email;
+        recordRosterAudit(data, user, "reassigned", data.roster[targetIdx], [
+          { field: "callsign", from: currentCallsign, to: newCallsign }
+        ]);
         await writeJson(rosterPath, data);
         send(res, 200, data.roster[targetIdx]);
         return;
       }
     }
 
-    data.roster[index] = sanitizeRosterEntry(payload, data.roster[index]);
+    const previousEntry = data.roster[index];
+    data.roster[index] = sanitizeRosterEntry(payload, previousEntry);
     data.updatedAt = new Date().toISOString();
     data.updatedBy = user.email;
+    recordRosterAudit(data, user, "updated", data.roster[index], rosterDiff(previousEntry, data.roster[index]));
     await writeJson(rosterPath, data);
     send(res, 200, data.roster[index]);
     return;
@@ -619,6 +871,7 @@ async function handleApi(req, res) {
       data.roster[existingIndex] = entry;
       data.updatedAt = new Date().toISOString();
       data.updatedBy = user.email;
+      recordRosterAudit(data, user, "filled slot", entry, rosterDiff(existing, entry));
       await writeJson(rosterPath, data);
       send(res, 201, entry);
       return;
@@ -628,6 +881,7 @@ async function handleApi(req, res) {
     data.roster.push(entry);
     data.updatedAt = new Date().toISOString();
     data.updatedBy = user.email;
+    recordRosterAudit(data, user, "created", entry, rosterDiff({}, entry));
     await writeJson(rosterPath, data);
     send(res, 201, entry);
     return;
@@ -639,6 +893,10 @@ async function handleApi(req, res) {
     const data = await readJson(rosterPath);
     const idx = data.roster.findIndex((e) => e.id === id);
     if (idx !== -1) {
+      recordRosterAudit(data, user, "vacated", data.roster[idx], [
+        { field: "name", from: String(data.roster[idx].name || ""), to: "" },
+        { field: "activity", from: String(data.roster[idx].activity || ""), to: "Vacant" }
+      ]);
       // Vacate the slot so the callsign stays available — don't delete the entry
       data.roster[idx].name = "";
       data.roster[idx].activity = "Vacant";
@@ -822,7 +1080,7 @@ async function handleApi(req, res) {
   if (req.method === "POST" && url.pathname.match(/^\/api\/applications\/[^/]+\/accept$/)) {
     if (!requireReviewApplications(user, res)) return;
     const id = decodeURIComponent(url.pathname.split("/")[3]);
-    const payload = await bodyJson(req);
+    await bodyJson(req).catch(() => ({})); // drain the request body; nothing in it is needed now
     const applications = await readJson(applicationsPath);
     const index = applications.applications.findIndex((application) => application.id === id);
     if (index === -1) {
@@ -834,63 +1092,21 @@ async function handleApi(req, res) {
       return;
     }
 
-    const roster = await readJson(rosterPath);
+    // Accepting no longer touches the roster at all. A callsign is a roster
+    // slot, and assigning one used to make acceptance a roster write — which
+    // is what blocked onboarding-only staff from accepting anyone. Recruits
+    // now live on the pipeline board until Academy Passed, where a rank and
+    // callsign get picked together.
     const application = applications.applications[index];
-    const notes = application.discord ? application.discord : "";
-
-    let entry;
-    const vacantIndex = payload.vacantEntryId
-      ? roster.roster.findIndex((e) => e.id === payload.vacantEntryId)
-      : -1;
-
-    if (vacantIndex !== -1) {
-      entry = sanitizeRosterEntry({
-        ...roster.roster[vacantIndex],
-        name: application.name,
-        callsign: payload.callsign || roster.roster[vacantIndex].callsign,
-        activity: "Active",
-        rank: payload.rank || roster.roster[vacantIndex].rank,
-        notes,
-        promotionDate: payload.promotionDate || new Date().toLocaleDateString("en-US"),
-        tig: "",
-        vacant: false
-      }, roster.roster[vacantIndex]);
-      roster.roster[vacantIndex] = entry;
-    } else {
-      const callsign = String(payload.callsign || "").trim();
-      const conflict = occupiedCallsignConflict(roster.roster, callsign);
-      if (conflict) {
-        send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
-        return;
-      }
-      entry = sanitizeRosterEntry({
-        callsign: payload.callsign,
-        name: application.name,
-        activity: "Active",
-        rank: payload.rank || "Cadet",
-        divisions: {},
-        strikes: {},
-        notes,
-        promotionDate: payload.promotionDate || new Date().toLocaleDateString("en-US"),
-        tig: "",
-        vacant: false
-      });
-      roster.roster.push(entry);
-    }
-    roster.updatedAt = new Date().toISOString();
-    roster.updatedBy = user.email;
-    await writeJson(rosterPath, roster);
-
     const acceptedAt = new Date().toISOString();
     applications.applications[index] = sanitizeApplication({
       ...application,
       status: "accepted",
       reviewedAt: acceptedAt,
-      reviewedBy: user.email,
-      rosterEntryId: entry.id
+      reviewedBy: user.email
     }, application);
     applications.applications[index].auditLog = [...(application.auditLog || []), {
-      at: acceptedAt, by: user.email, action: `accepted (${entry.callsign} ${entry.rank})`
+      at: acceptedAt, by: user.email, action: "accepted"
     }];
     await writeJson(applicationsPath, applications);
 
@@ -899,15 +1115,12 @@ async function handleApi(req, res) {
     const cardIdx = board.cards.findIndex((c) => c.applicationId === id);
     if (cardIdx !== -1) {
       board.cards[cardIdx].stage = "Application Accepted";
-      board.cards[cardIdx].rosterId = entry.id;
       board.cards[cardIdx].acceptedBy = user.name;
-      board.cards[cardIdx].callsign = entry.callsign;
-      board.cards[cardIdx].rank = entry.rank;
       board.cards[cardIdx].stageEnteredAt = new Date().toISOString();
     }
     await writeJson(onboardingPath, board);
 
-    send(res, 201, { application: applications.applications[index], rosterEntry: entry });
+    send(res, 201, { application: applications.applications[index] });
     return;
   }
 
@@ -925,6 +1138,10 @@ async function handleApi(req, res) {
     const next = sanitizeUser(payload);
     if (!next.email || !next.name) {
       send(res, 400, { error: "Name and email are required." });
+      return;
+    }
+    if (authorityOf(next) >= authorityOf(user)) {
+      send(res, 403, { error: "You cannot create an account at or above your own permission level." });
       return;
     }
     if (data.users.some((candidate) => candidate.email === next.email)) {
@@ -947,7 +1164,24 @@ async function handleApi(req, res) {
       send(res, 404, { error: "User not found." });
       return;
     }
+    // Without this any manage-users account could PUT itself (or an admin)
+    // to full permissions — the ladder has to be enforced on the write, not
+    // just hidden in the dashboard.
+    const reach = targetOutOfReach(user, data.users[index], { allowSelf: true });
+    if (reach) {
+      send(res, 403, { error: reach });
+      return;
+    }
     const next = sanitizeUser(payload, data.users[index]);
+    const isSelf = user.id === data.users[index].id;
+    if (isSelf && !samePermissions(next, data.users[index])) {
+      send(res, 403, { error: "You cannot change your own role or permissions." });
+      return;
+    }
+    if (!isSelf && authorityOf(next) >= authorityOf(user)) {
+      send(res, 403, { error: "You cannot grant permissions at or above your own level." });
+      return;
+    }
     if (data.users.some((candidate) => candidate.id !== id && candidate.email === next.email)) {
       send(res, 409, { error: "A user with that email already exists." });
       return;
@@ -955,6 +1189,188 @@ async function handleApi(req, res) {
     data.users[index] = next;
     await writeJson(usersPath, data);
     send(res, 200, publicUser(data.users[index]));
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/users/")) {
+    if (!requireManageUsers(user, res)) return;
+    const id = decodeURIComponent(url.pathname.split("/").pop());
+    const data = await readJson(usersPath);
+    const index = data.users.findIndex((candidate) => candidate.id === id);
+    if (index === -1) {
+      send(res, 404, { error: "User not found." });
+      return;
+    }
+    const reach = targetOutOfReach(user, data.users[index]);
+    if (reach) {
+      send(res, 403, { error: reach });
+      return;
+    }
+    // Belt and braces: even an admin can't remove the last account capable of
+    // managing users, or nobody can administer the site again without hand
+    // editing users.json on the volume.
+    const remainingManagers = data.users.filter(
+      (candidate) => candidate.id !== id && effectivePermissions(candidate).canManageUsers
+    );
+    if (!remainingManagers.length) {
+      send(res, 409, { error: "This is the last account that can manage users." });
+      return;
+    }
+    const [removed] = data.users.splice(index, 1);
+    await writeJson(usersPath, data);
+    // Kill any live session for the deleted account so they're logged out now
+    // rather than at the end of their 8h cookie.
+    for (const [token, session] of sessions) {
+      if (session.userId === id) sessions.delete(token);
+    }
+    console.log(`User ${removed.email} deleted by ${user.email}.`);
+    send(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/ranks") {
+    send(res, 200, await readRanks());
+    return;
+  }
+
+  // ── Discord ──
+  // Everything below is inert unless the matching environment variables are
+  // set on the host. No route here reads, writes, returns, or accepts a token.
+
+  if (req.method === "GET" && url.pathname === "/api/discord/config") {
+    if (!requireUser(user, res)) return;
+    const config = discordConfig();
+    send(res, 200, {
+      oauthEnabled: config.oauthEnabled,
+      roleSyncEnabled: config.roleSyncEnabled,
+      botEnabled: config.botEnabled,
+      notifyEnabled: config.notifyEnabled,
+      features: featureSwitches(),
+      linked: publicUser(user).discord || null
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/discord/link") {
+    if (!requireUser(user, res)) return;
+    if (!discordConfig().oauthEnabled) {
+      send(res, 503, { error: "Discord linking is not enabled on this server." });
+      return;
+    }
+    // Single-use, short-lived, and bound to the signed-in account, so a
+    // callback can't be replayed or aimed at somebody else's user record.
+    const state = crypto.randomBytes(24).toString("hex");
+    oauthStates.set(state, { userId: user.id, createdAt: Date.now() });
+    send(res, 200, { url: buildAuthorizeUrl(state) });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/discord/callback") {
+    const state = url.searchParams.get("state") || "";
+    const code = url.searchParams.get("code") || "";
+    const pending = oauthStates.get(state);
+    oauthStates.delete(state);
+    if (!pending || Date.now() - pending.createdAt > OAUTH_STATE_TTL_MS) {
+      send(res, 400, { error: "This Discord link request expired. Try again." });
+      return;
+    }
+    try {
+      const accessToken = await exchangeCode(code);
+      const identity = await fetchIdentity(accessToken);
+      const roleIds = await fetchGuildRoles(accessToken);
+      const data = await readJson(usersPath);
+      const index = data.users.findIndex((candidate) => candidate.id === pending.userId);
+      if (index === -1) {
+        send(res, 404, { error: "Account no longer exists." });
+        return;
+      }
+      const taken = data.users.find(
+        (candidate) => candidate.id !== pending.userId && candidate.discord?.id === identity.id
+      );
+      if (taken) {
+        send(res, 409, { error: "That Discord account is already linked to another user." });
+        return;
+      }
+      data.users[index].discord = sanitizeDiscordLink({
+        ...identity, roleIds, linkedAt: new Date().toISOString(), syncedAt: new Date().toISOString()
+      });
+      await applyDiscordPermissions(data.users[index], roleIds);
+      await writeJson(usersPath, data);
+      send(res, 302, "", { location: "/#dashboard" });
+      return;
+    } catch (error) {
+      send(res, error.statusCode || 502, { error: `Discord link failed: ${error.message}` });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/discord/unlink") {
+    if (!requireUser(user, res)) return;
+    const data = await readJson(usersPath);
+    const index = data.users.findIndex((candidate) => candidate.id === user.id);
+    if (index !== -1) {
+      data.users[index].discord = null;
+      await writeJson(usersPath, data);
+    }
+    send(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/discord/settings") {
+    if (!requireManageUsers(user, res)) return;
+    send(res, 200, await readDiscordSettings());
+    return;
+  }
+
+  if (req.method === "PUT" && url.pathname === "/api/discord/settings") {
+    if (!requireManageUsers(user, res)) return;
+    const payload = await bodyJson(req);
+    const next = {
+      ...sanitizeDiscordSettings(payload),
+      updatedAt: new Date().toISOString(),
+      updatedBy: user.email
+    };
+    await writeJson(discordPath, next);
+    send(res, 200, next);
+    return;
+  }
+
+  if (req.method === "PUT" && url.pathname === "/api/ranks") {
+    if (!requireManageRanks(user, res)) return;
+    const payload = await bodyJson(req);
+    const ranks = sanitizeRankList(payload.ranks);
+    if (!ranks.length) {
+      send(res, 400, { error: "At least one rank is required." });
+      return;
+    }
+    const roster = await readJson(rosterPath);
+    const inUse = ranksInUse(roster.roster);
+    const keptNames = new Set(ranks.map((rank) => rank.name.toLowerCase()));
+    for (const rank of await readRanks().then((data) => data.ranks)) {
+      const key = rank.name.toLowerCase();
+      if (!keptNames.has(key) && inUse.get(key)) {
+        send(res, 409, {
+          error: `${rank.name} is still assigned to ${inUse.get(key)} roster entr${inUse.get(key) === 1 ? "y" : "ies"}. Move them to another rank first.`
+        });
+        return;
+      }
+    }
+    const next = { ranks, updatedAt: new Date().toISOString(), updatedBy: user.email };
+    await writeJson(ranksPath, next);
+    send(res, 200, next);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/ranks/restore") {
+    if (!requireManageRanks(user, res)) return;
+    const seed = JSON.parse(await fs.readFile(path.join(seedDir, "ranks.json"), "utf8"));
+    const next = {
+      ranks: sanitizeRankList(seed.ranks),
+      updatedAt: new Date().toISOString(),
+      updatedBy: `${user.email} (restored defaults)`
+    };
+    await writeJson(ranksPath, next);
+    send(res, 200, next);
     return;
   }
 
@@ -972,6 +1388,10 @@ async function handleApi(req, res) {
       const roster = await readJson(rosterPath);
       const rIdx = roster.roster.findIndex((e) => e.id === card.rosterId);
       if (rIdx !== -1) {
+        recordRosterAudit(roster, user, "terminated (pipeline)", roster.roster[rIdx], [
+          { field: "name", from: String(roster.roster[rIdx].name || ""), to: "" },
+          { field: "activity", from: String(roster.roster[rIdx].activity || ""), to: "Vacant" }
+        ]);
         roster.roster[rIdx].name = "";
         roster.roster[rIdx].activity = "Vacant";
         roster.roster[rIdx].vacant = true;
@@ -1036,9 +1456,10 @@ async function handleApi(req, res) {
                 String(e.callsign).trim() === String(payload.callsign).trim()
       );
 
+      const card = board.cards[cardIdx];
       if (vacantIdx !== -1) {
         // Fill the vacant slot with the recruit's details
-        const card = board.cards[cardIdx];
+        const before = { ...roster.roster[vacantIdx] };
         roster.roster[vacantIdx].name = card.name;
         roster.roster[vacantIdx].rank = newRank;
         roster.roster[vacantIdx].activity = "Active";
@@ -1046,12 +1467,16 @@ async function handleApi(req, res) {
         roster.roster[vacantIdx].notes = card.discord || "";
         roster.roster[vacantIdx].promotionDate = new Date().toISOString().split("T")[0];
         roster.roster[vacantIdx].updatedAt = new Date().toISOString();
+        recordRosterAudit(roster, user, "academy passed", roster.roster[vacantIdx], rosterDiff(before, roster.roster[vacantIdx]));
 
         // Vacate the recruit's old slot (if it exists and is a different entry)
-        const oldRosterId = board.cards[cardIdx].rosterId;
+        const oldRosterId = card.rosterId;
         if (oldRosterId && oldRosterId !== roster.roster[vacantIdx].id) {
           const oldIdx = roster.roster.findIndex((e) => e.id === oldRosterId);
           if (oldIdx !== -1) {
+            recordRosterAudit(roster, user, "vacated (academy move)", roster.roster[oldIdx], [
+              { field: "name", from: String(roster.roster[oldIdx].name || ""), to: "" }
+            ]);
             roster.roster[oldIdx].name = "";
             roster.roster[oldIdx].activity = "Vacant";
             roster.roster[oldIdx].vacant = true;
@@ -1062,10 +1487,11 @@ async function handleApi(req, res) {
         }
 
         // Point the card's rosterId at the new PO slot
-        board.cards[cardIdx].rosterId = roster.roster[vacantIdx].id;
-      } else if (board.cards[cardIdx].rosterId) {
-        // Fallback: no matching vacant slot, just update the existing entry in place
-        const rIdx = roster.roster.findIndex((e) => e.id === board.cards[cardIdx].rosterId);
+        card.rosterId = roster.roster[vacantIdx].id;
+      } else if (card.rosterId) {
+        // No matching vacant slot, but the recruit already holds an entry —
+        // move them onto the requested callsign in place.
+        const rIdx = roster.roster.findIndex((e) => e.id === card.rosterId);
         if (rIdx !== -1) {
           const callsign = String(payload.callsign || "").trim();
           const conflict = occupiedCallsignConflict(roster.roster, callsign, roster.roster[rIdx].id);
@@ -1073,12 +1499,36 @@ async function handleApi(req, res) {
             send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
             return;
           }
+          const before = { ...roster.roster[rIdx] };
           roster.roster[rIdx].rank = newRank;
           roster.roster[rIdx].callsign = payload.callsign;
           roster.roster[rIdx].activity = "Active";
           roster.roster[rIdx].vacant = false;
           roster.roster[rIdx].updatedAt = new Date().toISOString();
+          recordRosterAudit(roster, user, "academy passed", roster.roster[rIdx], rosterDiff(before, roster.roster[rIdx]));
         }
+      } else {
+        // Recruits no longer get a roster entry at acceptance, so Academy
+        // Passed is where most of them join the roster for the first time.
+        // Without this branch the callsign landed on the card only and the
+        // officer never appeared on the roster at all.
+        const callsign = String(payload.callsign || "").trim();
+        const conflict = occupiedCallsignConflict(roster.roster, callsign);
+        if (conflict) {
+          send(res, 409, { error: `Callsign ${callsign} is already assigned to ${conflict.name}.` });
+          return;
+        }
+        const entry = sanitizeRosterEntry({
+          callsign,
+          name: card.name,
+          rank: newRank,
+          activity: "Active",
+          notes: card.discord || "",
+          promotionDate: new Date().toISOString().split("T")[0]
+        });
+        roster.roster.push(entry);
+        card.rosterId = entry.id;
+        recordRosterAudit(roster, user, "academy passed (new entry)", entry, rosterDiff({}, entry));
       }
 
       board.cards[cardIdx].callsign = payload.callsign;
@@ -1130,7 +1580,8 @@ async function handleApi(req, res) {
       role: "viewer",
       canEditRoster: false,
       canManageUsers: false,
-      canOnboard: false
+      canOnboard: false,
+      canManageRanks: false
     };
     data.users.push(newUser);
     await writeJson(usersPath, data);
@@ -1193,7 +1644,7 @@ async function handleApi(req, res) {
 
 async function initDataDir() {
   await fs.mkdir(dataDir, { recursive: true });
-  for (const file of ["roster.json", "users.json", "applications.json", "onboarding.json", "bugs.json"]) {
+  for (const file of ["roster.json", "users.json", "applications.json", "onboarding.json", "bugs.json", "ranks.json"]) {
     const dest = path.join(dataDir, file);
     const seed = path.join(seedDir, file);
     try {
@@ -1341,6 +1792,142 @@ async function restoreMissingSlots() {
   console.log(`Restored ${missing.length} missing roster slot(s) from seed.`);
 }
 
+// ── Discord bot wiring ─────────────────────────────────────────────────────
+// None of this runs unless DISCORD_BOT_TOKEN and DISCORD_GUILD_ID are present
+// in the environment. startBot() returns false and opens no socket otherwise.
+
+// A guild member is tied to a roster entry through their linked site account
+// first (exact, set by the user themselves via OAuth), falling back to the
+// Discord handle stored in the entry's notes field, which is how the roster
+// has always recorded it.
+async function findRosterEntryForMember(roster, member) {
+  const discordId = member?.user?.id;
+  const handle = String(member?.user?.username || "").toLowerCase();
+  const { users } = await readJson(usersPath);
+  const linked = users.find((candidate) => candidate.discord?.id === discordId);
+  if (linked) {
+    const byName = roster.roster.find(
+      (entry) => !entry.vacant && entry.name &&
+                 entry.name.trim().toLowerCase() === String(linked.name || "").trim().toLowerCase()
+    );
+    if (byName) return byName;
+  }
+  if (!handle) return null;
+  return roster.roster.find(
+    (entry) => !entry.vacant && String(entry.notes || "").toLowerCase().includes(handle)
+  ) || null;
+}
+
+const discordActor = { email: "system:discord", name: "Discord sync" };
+
+async function onDiscordMemberUpdate(member) {
+  const settings = await readDiscordSettings();
+  const features = featureSwitches();
+  const nextRoles = member.roles || [];
+  const previous = discordRoleCache.get(member.user?.id) || [];
+  discordRoleCache.set(member.user?.id, nextRoles);
+  const { gained, lost } = diffMappedRoles(previous, nextRoles, settings);
+  if (!gained.length && !lost.length) return;
+
+  await withWriteLock(async () => {
+    const roster = await readJson(rosterPath);
+    const entry = await findRosterEntryForMember(roster, member);
+    const { rank } = permissionsForRoles(nextRoles, settings);
+    const stillDepartment = permissionsForRoles(nextRoles, settings).matched;
+
+    if (entry && !stillDepartment && features.autoResignOnRankChange) {
+      recordRosterAudit(roster, discordActor, "auto-resigned (left department roles)", entry, [
+        { field: "name", from: entry.name, to: "" }
+      ]);
+      Object.assign(entry, {
+        name: "", activity: "Vacant", vacant: true, notes: "", employeeNotes: "",
+        clearedForPatrol: false, promotionDate: "", updatedAt: new Date().toISOString()
+      });
+      roster.updatedAt = new Date().toISOString();
+      roster.updatedBy = discordActor.email;
+      await writeJson(rosterPath, roster);
+      await sendChannelMessage(`has been removed from the roster (no department roles).`, {
+        mentionUserId: member.user?.id
+      });
+      return;
+    }
+
+    if (entry && rank && rank !== entry.rank) {
+      const from = entry.rank;
+      recordRosterAudit(roster, discordActor, "rank synced from Discord", entry, [
+        { field: "rank", from, to: rank }
+      ]);
+      entry.rank = rank;
+      entry.promotionDate = new Date().toISOString().split("T")[0];
+      entry.updatedAt = new Date().toISOString();
+      roster.updatedAt = new Date().toISOString();
+      roster.updatedBy = discordActor.email;
+      await writeJson(rosterPath, roster);
+      await sendChannelMessage(`rank updated: **${from || "—"} → ${rank}**.`, {
+        mentionUserId: member.user?.id
+      });
+      return;
+    }
+
+    // No roster entry yet, but they picked up a mapped rank — this is the
+    // "auto-add recruits" path. Only fills an existing vacant slot for that
+    // rank; it never invents a callsign.
+    if (!entry && rank && features.autoAddRecruits) {
+      const slot = roster.roster.find(
+        (candidate) => (candidate.vacant || candidate.activity === "Vacant") &&
+                       normalizeRankName(candidate.rank) === normalizeRankName(rank)
+      );
+      if (!slot) {
+        await sendChannelMessage(
+          `joined as **${rank}** but there is no vacant ${rank} slot on the roster — add one manually.`,
+          { mentionUserId: member.user?.id }
+        );
+        return;
+      }
+      Object.assign(slot, {
+        name: member.nick || member.user?.global_name || member.user?.username || "",
+        activity: "Active",
+        vacant: false,
+        notes: member.user?.username || "",
+        promotionDate: new Date().toISOString().split("T")[0],
+        updatedAt: new Date().toISOString()
+      });
+      recordRosterAudit(roster, discordActor, "auto-added from Discord", slot, rosterDiff({}, slot));
+      roster.updatedAt = new Date().toISOString();
+      roster.updatedBy = discordActor.email;
+      await writeJson(rosterPath, roster);
+      await sendChannelMessage(`added to the roster as **${rank}** (${slot.callsign}).`, {
+        mentionUserId: member.user?.id
+      });
+    }
+  });
+}
+
+async function onDiscordMemberRemove(member) {
+  if (!featureSwitches().autoResignOnRankChange) return;
+  discordRoleCache.delete(member.user?.id);
+  await withWriteLock(async () => {
+    const roster = await readJson(rosterPath);
+    const entry = await findRosterEntryForMember(roster, member);
+    if (!entry) return;
+    recordRosterAudit(roster, discordActor, "auto-resigned (left guild)", entry, [
+      { field: "name", from: entry.name, to: "" }
+    ]);
+    Object.assign(entry, {
+      name: "", activity: "Vacant", vacant: true, notes: "", employeeNotes: "",
+      clearedForPatrol: false, promotionDate: "", updatedAt: new Date().toISOString()
+    });
+    roster.updatedAt = new Date().toISOString();
+    roster.updatedBy = discordActor.email;
+    await writeJson(rosterPath, roster);
+    await sendChannelMessage(`**${member.user?.username}** left the Discord — their roster slot has been vacated.`);
+  });
+}
+
+// Last seen roles per member, so GUILD_MEMBER_UPDATE can tell a rank change
+// from a nickname edit. Rebuilt naturally as events arrive.
+const discordRoleCache = new Map();
+
 // Every handler does read-JSON, check, mutate, write-JSON with no locking —
 // two requests racing on the same file could both read before either writes,
 // letting both pass a uniqueness check that should only let one through
@@ -1394,5 +1981,16 @@ setInterval(() => {
 initDataDir().then(() => {
   server.listen(port, () => {
     console.log(`PD roster running at http://localhost:${port}`);
+    const config = discordConfig();
+    const started = startBot({
+      onMemberUpdate: (member) => onDiscordMemberUpdate(member).catch((e) => console.error("Discord update failed:", e.message)),
+      onMemberAdd: (member) => onDiscordMemberUpdate(member).catch((e) => console.error("Discord add failed:", e.message)),
+      onMemberRemove: (member) => onDiscordMemberRemove(member).catch((e) => console.error("Discord remove failed:", e.message))
+    });
+    console.log(
+      `Discord: OAuth linking ${config.oauthEnabled ? "enabled" : "off"}, ` +
+      `role sync ${config.roleSyncEnabled ? "enabled" : "off"}, ` +
+      `bot ${started ? "connecting" : "off"}.`
+    );
   });
 });

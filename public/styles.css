@@ -1676,3 +1676,269 @@ legend {
     transform: translateY(0);
   }
 }
+
+/* ── Accept form hint ── */
+
+.accept-hint {
+  border-left: 2px solid var(--gold);
+  padding-left: 10px;
+}
+
+/* ── Rank Manager ── */
+
+.rank-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+.rank-row {
+  align-items: center;
+  background: var(--band);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 28px minmax(0, 1.4fr) minmax(0, 1fr) 36px auto;
+  padding: 6px 8px;
+}
+
+.rank-row-order {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.rank-row input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+  min-width: 0;
+  padding: 5px 7px;
+}
+
+.rank-row-count {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.rank-row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.rank-row-actions button {
+  border-radius: 3px;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.rank-row-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.rank-add-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  margin-bottom: 12px;
+}
+
+/* ── Discord panel ── */
+
+.discord-lights {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  margin-bottom: 12px;
+}
+
+.discord-light {
+  align-items: center;
+  background: var(--band);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.discord-light small {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+}
+
+.discord-light-dot {
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 9px;
+  width: 9px;
+}
+
+.discord-light.on .discord-light-dot { background: var(--green); }
+.discord-light.off .discord-light-dot { background: var(--muted); }
+
+.discord-role-row {
+  background: var(--band);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+}
+
+.discord-role-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.discord-role-head code {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.discord-role-perms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.discord-role-rank {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.discord-add-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin: 10px 0;
+}
+
+/* ── Roster audit log ── */
+
+.audit-item {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 4px;
+}
+
+.audit-item-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.audit-action {
+  color: var(--gold);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.audit-meta {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+}
+
+.audit-changes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 5px;
+}
+
+.audit-change {
+  background: var(--band);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.audit-change s {
+  color: var(--muted);
+}
+
+/* ── Stage picker (touch path for the pipeline board) ── */
+
+/* The card is a flex column, so align-self keeps this a small button in the
+   corner — float would stretch it across the card's full width. */
+.kanban-card-move {
+  align-self: flex-end;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+  margin-bottom: -4px;
+  padding: 4px 8px;
+}
+
+.kanban-card-move:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.stage-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.stage-option {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 12px;
+  text-align: left;
+}
+
+.stage-option:hover:not(:disabled) {
+  border-color: var(--gold);
+}
+
+.stage-option:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+@media (max-width: 600px) {
+  .rank-row {
+    grid-template-columns: 24px minmax(0, 1fr) 30px;
+    grid-template-areas:
+      "order name count"
+      "order category actions";
+  }
+  .rank-row-order { grid-area: order; }
+  .rank-row-name { grid-area: name; }
+  .rank-row-category { grid-area: category; }
+  .rank-row-count { grid-area: count; }
+  .rank-row-actions { grid-area: actions; }
+
+  .rank-add-row {
+    grid-template-columns: 1fr;
+  }
+
+  /* The move button is the only way to reorder cards on touch — HTML5 drag
+     events never fire there — so give it a proper tap target. */
+  .kanban-card-move {
+    font-size: 16px;
+    min-height: 40px;
+    min-width: 44px;
+    padding: 8px 12px;
+  }
+}

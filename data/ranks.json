@@ -1,0 +1,25 @@
+{
+  "ranks": [
+    { "name": "Commissioner", "category": "High Command", "aliases": ["Commisioner"] },
+    { "name": "Chief", "category": "High Command", "aliases": ["Chief Of Police"] },
+    { "name": "Assistant Chief", "category": "High Command", "aliases": [] },
+    { "name": "Deputy Chief", "category": "High Command", "aliases": [] },
+    { "name": "Commander", "category": "High Command", "aliases": [] },
+    { "name": "Captain", "category": "Command", "aliases": [] },
+    { "name": "Lieutenant", "category": "Command", "aliases": [] },
+    { "name": "Master Sergeant", "category": "Supervisor", "aliases": [] },
+    { "name": "Staff Sergeant", "category": "Supervisor", "aliases": ["DCI Staff Sergeant", "Staff Sergeant DCI"] },
+    { "name": "Sergeant", "category": "Supervisor", "aliases": [] },
+    { "name": "Lead Detective", "category": "Detective Bureau", "aliases": [] },
+    { "name": "Corporal", "category": "Supervisor In Training", "aliases": [] },
+    { "name": "Detective 2", "category": "Detective Bureau", "aliases": ["Detective II"] },
+    { "name": "Detective", "category": "Detective Bureau", "aliases": ["Detective 1", "Detective I"] },
+    { "name": "Sr. Officer", "category": "Patrol Officer", "aliases": ["Senior Officer"] },
+    { "name": "Officer II", "category": "Patrol Officer", "aliases": [] },
+    { "name": "Officer I", "category": "Patrol Officer", "aliases": [] },
+    { "name": "Probationary Officer", "category": "Probationary Officer", "aliases": [] },
+    { "name": "Recruit", "category": "Officer In Training", "aliases": [] }
+  ],
+  "updatedAt": null,
+  "updatedBy": "system:seed"
+}

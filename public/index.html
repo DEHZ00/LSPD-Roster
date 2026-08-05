@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LSPD Roster</title>
     <link rel="icon" type="image/webp" href="/Lspdss.webp">
-    <link rel="stylesheet" href="/styles.css?v=8">
+    <link rel="stylesheet" href="/styles.css?v=9">
   </head>
   <body>
     <header class="topbar">
@@ -231,25 +231,13 @@
                   <button type="button" id="expandReviewBtn" class="secondary hidden">Full Review ⤢</button>
                 </div>
                 <input name="applicationId" type="hidden">
-                <input name="vacantEntryId" type="hidden">
                 <label><span>Applicant</span><input name="name" disabled></label>
-                <div class="form-grid">
-                  <label>
-                    <span>Rank</span>
-                    <select name="rank" id="acceptRankPicker" required>
-                      <option value="">— Select rank —</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Callsign</span>
-                    <select name="callsign" id="acceptCallsignPicker" disabled required>
-                      <option value="">— Select rank first —</option>
-                    </select>
-                  </label>
-                </div>
-                <label><span>Promotion date</span><input name="promotionDate" type="date"></label>
+                <p class="notice accept-hint">
+                  Accepting moves this applicant into the recruit pipeline.
+                  Their rank and callsign are assigned later, at <strong>Academy Passed</strong>.
+                </p>
                 <div class="button-row">
-                  <button type="submit">Accept and add to roster</button>
+                  <button type="submit">Accept into pipeline</button>
                   <button id="rejectApplicationButton" type="button" class="danger">Reject</button>
                 </div>
                 <p id="applicationDetail" class="notice"></p>
@@ -389,6 +377,18 @@
       </div>
 
       <!-- Terminate confirmation modal -->
+      <!-- Stage picker — the touch path for moving pipeline cards -->
+      <div id="stagePickerModal" class="modal-overlay hidden">
+        <div class="modal">
+          <h3>Move <span id="stagePickerName">recruit</span></h3>
+          <p class="notice">Pick the stage to move them to.</p>
+          <div class="stage-options" id="stagePickerOptions"></div>
+          <div class="button-row">
+            <button type="button" id="stagePickerCancelBtn" class="secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+
       <div id="terminateModal" class="modal-overlay hidden">
         <div class="modal">
           <h3>Terminate Employee</h3>
@@ -503,10 +503,78 @@
               <label class="checkbox"><input name="canEditRoster" type="checkbox"> Can edit roster</label>
               <label class="checkbox"><input name="canManageUsers" type="checkbox"> Can manage users</label>
               <label class="checkbox"><input name="canOnboard" type="checkbox"> Can onboard</label>
-              <button type="submit">Save user</button>
-              <button id="newUserButton" type="button" class="secondary">New user</button>
+              <label class="checkbox"><input name="canManageRanks" type="checkbox"> Can manage ranks</label>
+              <p id="userFormNotice" class="notice hidden"></p>
+              <div class="button-row">
+                <button type="submit">Save user</button>
+                <button id="newUserButton" type="button" class="secondary">New user</button>
+                <button id="deleteUserButton" type="button" class="danger hidden">Delete user</button>
+              </div>
             </form>
             <div class="mini-list users" id="userList"></div>
+          </section>
+
+          <!-- Rank Manager — canManageRanks only -->
+          <section id="rankAdmin" class="editor-panel rank-admin hidden">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Rank Manager</p>
+                <h3>Ranks &amp; promotion order</h3>
+              </div>
+              <button id="restoreRanksBtn" type="button" class="secondary">Restore defaults</button>
+            </div>
+            <p class="notice">
+              Ordered highest to lowest — this is the promotion ladder. The category
+              is only the heading a rank appears under on the public roster, so
+              ranks sharing a category don't have to sit next to each other.
+              A rank still assigned to someone can't be removed.
+            </p>
+            <div class="rank-manager-list" id="rankManagerList"></div>
+            <form id="addRankForm" class="rank-add-row">
+              <input name="name" placeholder="New rank name" required>
+              <input name="category" placeholder="Category" list="rankCategoryOptions" required>
+              <datalist id="rankCategoryOptions"></datalist>
+              <button type="submit">Add rank</button>
+            </form>
+            <div class="button-row">
+              <button id="saveRanksBtn" type="button">Save rank list</button>
+              <span id="rankDirtyNotice" class="notice hidden">Unsaved changes</span>
+            </div>
+          </section>
+
+          <!-- Discord integration — manage-users only -->
+          <section id="discordAdmin" class="editor-panel discord-admin hidden">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Discord</p>
+                <h3>Account linking &amp; role sync</h3>
+              </div>
+              <button id="refreshDiscordBtn" type="button" class="secondary">Refresh</button>
+            </div>
+            <div id="discordStatus" class="discord-status"></div>
+            <div id="discordRoleMap" class="discord-role-map"></div>
+            <form id="addDiscordRoleForm" class="discord-add-row hidden">
+              <input name="roleId" placeholder="Discord role ID" required>
+              <input name="label" placeholder="Label (e.g. Command)" required>
+              <input name="rank" placeholder="Roster rank (optional)" list="discordRankOptions">
+              <datalist id="discordRankOptions"></datalist>
+              <button type="submit">Add mapping</button>
+            </form>
+            <div class="button-row">
+              <button id="saveDiscordBtn" type="button" class="hidden">Save role mapping</button>
+            </div>
+          </section>
+
+          <!-- Roster audit log — roster editors -->
+          <section id="rosterAudit" class="editor-panel roster-audit hidden">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Audit</p>
+                <h3>Roster change log</h3>
+              </div>
+              <button id="refreshAuditBtn" type="button" class="secondary">Refresh</button>
+            </div>
+            <div class="mini-list" id="auditList"></div>
           </section>
 
           <section id="bugReportsAdmin" class="editor-panel bug-reports-admin hidden">
@@ -567,6 +635,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=17" type="module"></script>
+    <script src="/app.js?v=18" type="module"></script>
   </body>
 </html>

@@ -26,14 +26,19 @@ data/
   roster.json       — roster entries (source of truth)
   users.json        — user accounts with hashed-less passwords
   applications.json — join applications
+  ranks.json        — rank ladder + categories (Rank Manager edits this)
+  discord.json      — Discord role → permission mapping (config only, no secrets)
   source-roster.csv — original import source
 scripts/
   import-roster.mjs — Google Sheets → roster.json importer
+discord.js          — Discord integration, dormant unless env vars are set
+docs/
+  discord.md        — Discord setup, security model, kill switches
 ```
 
 ## Key facts
 
-**Auth**: In-memory session Map (resets on server restart). Cookie `pd_session` (HttpOnly, 8h) — sessions are also expired server-side on access (`isSessionExpired`) and swept hourly, not just relying on the cookie's own expiry. Passwords are scrypt-hashed (`hashPassword`/`verifyPassword` in server.js); a boot-time migration (`migratePlaintextPasswords`) upgrades any account still storing a plaintext password (e.g. a data volume seeded before hashing shipped). Two permission flags: `canEditRoster`, `canManageUsers`, plus `canOnboard`.
+**Auth**: In-memory session Map (resets on server restart). Cookie `pd_session` (HttpOnly, 8h) — sessions are also expired server-side on access (`isSessionExpired`) and swept hourly, not just relying on the cookie's own expiry. Passwords are scrypt-hashed (`hashPassword`/`verifyPassword` in server.js); a boot-time migration (`migratePlaintextPasswords`) upgrades any account still storing a plaintext password (e.g. a data volume seeded before hashing shipped). Permission flags: `canEditRoster`, `canManageUsers`, `canOnboard`, `canManageRanks`. Admins hold all four regardless of what's stored — applied by `effectivePermissions()`, which every `require*` guard and `publicUser()` goes through. Don't read a raw flag off a user record; that split (display used the admin override, the guards didn't) meant an admin with unchecked boxes saw full controls and got 403s.
 
 **Write serialization**: every POST/PUT/DELETE under `/api/` runs through a single in-process write queue (`withWriteLock` in server.js) so concurrent requests can't race past a read-check-write uniqueness check (callsign conflicts, duplicate emails, etc). GET requests aren't queued.
 
@@ -41,7 +46,13 @@ scripts/
 
 **Callsign uniqueness** is enforced server-side (`occupiedCallsignConflict` in server.js) on every path that assigns a callsign to a roster entry — new entry creation, the Promote/Reassign swap, application acceptance, and the onboarding Academy-Passed flow. The frontend also restricts callsign pickers to vacant slots, but that's a UX convenience only; the server is the actual guard.
 
-**Rank categories** (defined in `app.js`): High Command → Command → Supervisor → Supervisor In Training → Patrol Officer → Probationary Officer → Officer In Training. These drive the category overview cards on the public roster.
+**Ranks**: single source of truth is `data/ranks.json`, served by `GET /api/ranks` and edited through the dashboard's Rank Manager (`canManageRanks`). It's a **flat array, ordered highest to lowest** — that order *is* the promotion ladder. Each entry has a `category` (the heading it appears under on the public roster) and `aliases` (old spellings already in roster.json, e.g. `Commisioner`, `DCI Staff Sergeant` — matched by `categoryForRank`, never offered in a picker). A category's ranks don't have to be adjacent: Lead Detective sits between Sergeant and Corporal in the ladder while sharing the Detective Bureau card with the ranks below Corporal.
+
+Ranks live in their own file **on purpose**. `syncSeedImport()` replaces the entire live `roster.json` with the sheet-derived seed whenever a newer import ships, so ranks stored there would be silently wiped by the next `npm run import:roster` + deploy. Nothing in the import path touches `ranks.json`. `POST /api/ranks/restore` re-seeds from the repo copy; a rank still assigned to a roster entry can't be deleted (409).
+
+**User authority ladder** (`ROLE_AUTHORITY` / `authorityOf` / `targetOutOfReach` in server.js): admin 3 › command 2 › supervisor & onboarding 1 › viewer 0. A manage-users account may only delete or change permissions on an account **strictly below its own level**, may not edit its own role or flags, and may not create or promote anyone to its own level. The last account holding `canManageUsers` can't be deleted. Enforced on POST, PUT and DELETE — the dashboard mirrors it for UX only. Before this, any `canManageUsers` account could PUT itself to admin.
+
+**Roster audit log**: `recordRosterAudit`/`rosterDiff` append to `auditLog` inside `roster.json` (capped at 500, newest first) on every roster write — including Discord-driven ones, recorded as `system:discord`. It rides the same write lock as the change itself so the two can never disagree. **`GET /api/roster` is public and strips `auditLog`**; staff read it via `GET /api/roster/audit` (requireEdit). Don't send the raw roster file to an unauthenticated caller.
 
 **Divisions/strikes**: single source of truth is `roster.json` (`divisions`/`strikes` arrays), read via the API in `loadRoster()`. Don't hardcode a duplicate list in `app.js`.
 
@@ -53,13 +64,42 @@ scripts/
 - `POST /api/login` / `POST /api/logout` / `POST /api/register`
 - `POST /api/applications` — public, submit application
 - `GET /api/applications` — requireEdit or canOnboard
-- `POST /api/applications/:id/accept` — creates/fills a roster entry
+- `POST /api/applications/:id/accept` — marks accepted and advances the pipeline card; **writes nothing to the roster**
 - `POST /api/applications/:id/reject`
-- `GET/POST /api/roster` — GET public, POST requireEdit
+- `GET/POST /api/roster` — GET public (audit log stripped), POST requireEdit
+- `GET /api/roster/audit` — requireEdit
 - `PUT/DELETE /api/roster/:id` — requireEdit
-- `GET/POST /api/users`, `PUT /api/users/:id` — requireManageUsers
+- `GET/POST /api/users`, `PUT/DELETE /api/users/:id` — requireManageUsers + authority ladder
+- `GET /api/ranks` — public; `PUT /api/ranks`, `POST /api/ranks/restore` — requireManageRanks
 - `GET/PUT/DELETE /api/onboarding[/:id]` — requireOnboard
+- `GET /api/discord/config`, `GET /api/discord/link`, `GET /api/discord/callback`, `POST /api/discord/unlink` — signed in
+- `GET/PUT /api/discord/settings` — requireManageUsers (role mapping only, never credentials)
 - `POST/GET/PUT /api/bugs[/:id]` — submit public, view/manage requires edit or manage-users perms
+
+## Onboarding: where a callsign gets assigned
+
+Accepting an application does **not** touch the roster and does **not** assign a
+callsign — it only flips the application to `accepted` and moves the pipeline
+card to "Application Accepted". A callsign is a roster slot, so assigning one at
+acceptance made accepting a roster write, which is what blocked onboarding-only
+staff from accepting anyone at all.
+
+Rank and callsign are chosen together at **Academy Passed**, which has three
+paths in `PUT /api/onboarding/:id`: fill the matching vacant slot, move an
+existing entry onto the requested callsign, or (the common case now, since
+recruits arrive with no entry) create a new entry. Every path checks
+`occupiedCallsignConflict` unless it's filling a slot already known to be vacant.
+
+## Discord
+
+`discord.js` is complete and **dormant**. No socket opens and no request leaves
+the server unless the matching env vars are set. Every credential is read from
+`process.env` and nowhere else — no route accepts, returns, or logs a token, no
+file under `data/` stores one, and no dashboard field can change one, so a
+compromised admin account can't switch it on. `data/discord.json` holds role→
+permission mapping only. Discord roles can grant permission flags but never
+`role: "admin"`. See `docs/discord.md` for setup and the per-feature kill
+switches.
 
 ## Frontend asset caching — important
 
