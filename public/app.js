@@ -299,11 +299,14 @@ function categoryForRank(rank) {
   return match?.category || "Other";
 }
 
+// Plain numbers first, then each prefixed series, each in numeric order —
+// otherwise D-10 sorts before D-9 and the roster reads out of sequence.
 function byCallsign(a, b) {
-  const na = parseInt(a.callsign, 10);
-  const nb = parseInt(b.callsign, 10);
-  if (!isNaN(na) && !isNaN(nb)) return na - nb;
-  return String(a.callsign || "").localeCompare(String(b.callsign || ""));
+  const pa = parseCallsign(a.callsign);
+  const pb = parseCallsign(b.callsign);
+  if (!pa || !pb) return String(a.callsign || "").localeCompare(String(b.callsign || ""));
+  if (pa.prefix !== pb.prefix) return pa.prefix.localeCompare(pb.prefix);
+  return pa.number - pb.number;
 }
 
 // Roster sections follow the rank ladder and split a category into separate
@@ -630,10 +633,7 @@ function populateEntryCallsigns(rank, currentCallsign = "", selectCallsign = cur
   const slots = rosterData.roster.filter(
     (e) => (e.vacant || e.activity === "Vacant" || !e.name) && cleanRank(e.rank) === cleanRank(rank)
   );
-  slots.sort((a, b) => {
-    const na = parseInt(a.callsign, 10), nb = parseInt(b.callsign, 10);
-    return (!isNaN(na) && !isNaN(nb)) ? na - nb : String(a.callsign).localeCompare(String(b.callsign));
-  });
+  slots.sort(byCallsign);
 
   const options = ['<option value="">— Select callsign —</option>'];
   // Always include the current callsign even if the slot is occupied (editing in place)
@@ -1266,14 +1266,28 @@ let rankDraftDirty = false;
 // slots a block still needs before you press the button.
 const MAX_GENERATED_SLOTS = 300;
 
+// Mirrors parseCallsign() on the server. A callsign is an optional prefix plus
+// a number — 325, D-325, SWAT-01 — and the prefix must contain a non-digit so
+// a plain "325" can't be read as prefix "3" plus 25.
+const CALLSIGN_PREFIX_CHARS = /^[A-Za-z0-9 ./_-]{1,10}$/;
+
+function parseCallsign(value) {
+  const match = /^(.*?)(\d{1,6})$/.exec(String(value ?? "").trim());
+  if (!match) return null;
+  const [, prefix, digits] = match;
+  if (prefix && (!CALLSIGN_PREFIX_CHARS.test(prefix) || /^\d+$/.test(prefix))) return null;
+  return { prefix, number: Number(digits), width: digits.length };
+}
+
 function callsignsInRange(from, to) {
-  const start = Number(from);
-  const end = Number(to);
-  if (!from || !to || !Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
-  const width = String(from).length;
+  const start = parseCallsign(from);
+  const end = parseCallsign(to);
+  if (!start || !end) return [];
+  if (start.prefix !== end.prefix) return [];
+  if (end.number < start.number) return [];
   const out = [];
-  for (let n = start; n <= end && out.length < MAX_GENERATED_SLOTS; n += 1) {
-    out.push(String(n).padStart(width, "0"));
+  for (let n = start.number; n <= end.number && out.length < MAX_GENERATED_SLOTS; n += 1) {
+    out.push(`${start.prefix}${String(n).padStart(start.width, "0")}`);
   }
   return out;
 }
@@ -1284,20 +1298,38 @@ function callsignsInRange(from, to) {
 // nowhere near where it actually sits — a Detective landing in the 700s when
 // it belongs between Corporal and Sr. Officer.
 function availableWindow(index) {
+  const self = rankDraft[index];
+  // Only ranks in the same series bound this one — a D- block says nothing
+  // about where a plain numeric rank belongs, and vice versa. With nothing set
+  // yet we assume plain numbers, which is what every existing rank uses.
+  const own = parseCallsign(self?.callsignFrom) || parseCallsign(self?.callsignTo);
+  const series = (own?.prefix || "").toLowerCase();
+  const sameSeries = (value) => {
+    const parsed = parseCallsign(value);
+    return parsed && parsed.prefix.toLowerCase() === series ? parsed : null;
+  };
+
   let above = null;
   for (let i = index - 1; i >= 0; i -= 1) {
-    const rank = rankDraft[i];
-    if (rank.callsignTo) { above = Number(rank.callsignTo); break; }
+    const parsed = sameSeries(rankDraft[i].callsignTo);
+    if (parsed) { above = parsed; break; }
   }
   let below = null;
   for (let i = index + 1; i < rankDraft.length; i += 1) {
-    const rank = rankDraft[i];
-    if (rank.callsignFrom) { below = Number(rank.callsignFrom); break; }
+    const parsed = sameSeries(rankDraft[i].callsignFrom);
+    if (parsed) { below = parsed; break; }
   }
-  const from = above === null ? 1 : above + 1;
-  const to = below === null ? null : below - 1;
-  if (to === null || to < from) return null;
-  return { from: String(from), to: String(to), size: to - from + 1 };
+  if (!below) return null;
+  const from = above ? above.number + 1 : 1;
+  const to = below.number - 1;
+  if (to < from) return null;
+  // Only pad when this rank already has a block saying how wide its numbers
+  // are. Padding to a neighbour's width would suggest 001–100 to a rank whose
+  // roster convention is plain 1–100.
+  const width = own?.width ?? 0;
+  const prefix = own?.prefix ?? below.prefix;
+  const show = (n) => `${prefix}${String(n).padStart(width, "0")}`;
+  return { from: show(from), to: show(to), size: to - from + 1 };
 }
 
 function markRankDraftDirty(dirty) {
@@ -1329,8 +1361,13 @@ function rankStatusHtml(index, officerCount) {
   }
   // A block outside the window its neighbours leave is how a rank ends up with
   // numbers nowhere near where it actually sits on the roster.
-  const outOfPlace = gap &&
-    (Number(rank.callsignFrom) < Number(gap.from) || Number(rank.callsignTo) > Number(gap.to));
+  // Compare the numbers, not the text — "D-99" vs "D-100" sorts wrong as text.
+  const own = parseCallsign(rank.callsignFrom);
+  const ownEnd = parseCallsign(rank.callsignTo);
+  const gapFrom = gap && parseCallsign(gap.from);
+  const gapTo = gap && parseCallsign(gap.to);
+  const outOfPlace = gap && own && ownEnd && gapFrom && gapTo &&
+    (own.number < gapFrom.number || ownEnd.number > gapTo.number);
   const main = missing
     ? `<span class="rank-status-warn">${missing} of ${block.length} not created</span>`
     : `<span class="rank-status-ok">${block.length} callsigns</span>`;
@@ -1389,9 +1426,9 @@ function renderRankManager() {
         <label class="rank-field">
           <span>Callsigns</span>
           <span class="rank-range">
-            <input inputmode="numeric" placeholder="from" value="${escapeHtml(rank.callsignFrom || "")}" data-rank-field="callsignFrom" aria-label="First callsign for ${escapeHtml(rank.name)}">
+            <input placeholder="e.g. 325 or D-325" value="${escapeHtml(rank.callsignFrom || "")}" data-rank-field="callsignFrom" aria-label="First callsign for ${escapeHtml(rank.name)}" autocapitalize="characters" autocomplete="off" spellcheck="false">
             <span class="rank-range-dash">to</span>
-            <input inputmode="numeric" placeholder="to" value="${escapeHtml(rank.callsignTo || "")}" data-rank-field="callsignTo" aria-label="Last callsign for ${escapeHtml(rank.name)}">
+            <input placeholder="e.g. 330 or D-330" value="${escapeHtml(rank.callsignTo || "")}" data-rank-field="callsignTo" aria-label="Last callsign for ${escapeHtml(rank.name)}" autocapitalize="characters" autocomplete="off" spellcheck="false">
           </span>
         </label>
         <div class="rank-card-status">${rankStatusHtml(index, officers)}</div>

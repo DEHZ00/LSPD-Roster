@@ -77,8 +77,9 @@ function isHashedPassword(stored) {
 function occupiedCallsignConflict(rosterEntries, callsign, excludeId = null) {
   const trimmed = String(callsign || "").trim();
   if (!trimmed) return null;
+  const key = trimmed.toLowerCase();
   const match = rosterEntries.find(
-    (e) => e.id !== excludeId && String(e.callsign || "").trim() === trimmed
+    (e) => e.id !== excludeId && String(e.callsign || "").trim().toLowerCase() === key
   );
   if (!match) return null;
   return !match.vacant && match.activity !== "Vacant" && match.name ? match : null;
@@ -457,8 +458,8 @@ function sanitizeRankList(input) {
         ? [...new Set(raw.aliases.map((a) => normalizeRankName(a).slice(0, 60)).filter(Boolean))].slice(0, 20)
         : [],
       // Callsign block this rank draws from, used to generate vacant slots.
-      // Digits only — the roster's callsigns are numeric and the generator
-      // counts through them.
+      // A number, optionally with a prefix (325, D-325, SWAT-01) — the
+      // generator counts on the number and keeps the prefix.
       callsignFrom: sanitizeCallsignBound(raw?.callsignFrom),
       callsignTo: sanitizeCallsignBound(raw?.callsignTo)
     });
@@ -466,23 +467,48 @@ function sanitizeRankList(input) {
   return ranks;
 }
 
-function sanitizeCallsignBound(value) {
+// A callsign is an optional prefix followed by a number: 325, D-325, SWAT-01,
+// K9 4. Ranges count on the number and carry the prefix and digit width along,
+// so D-325 to D-330 gives D-325…D-330, and 007 to 012 stays three digits.
+//
+// The prefix must contain a non-digit. Without that rule a plain "325" splits
+// into prefix "3" + number 25, and any range crossing a hundred (95 to 105)
+// looks like two different series and generates nothing.
+const CALLSIGN_PREFIX_CHARS = /^[A-Za-z0-9 ./_-]{1,10}$/;
+
+function parseCallsign(value) {
   const text = String(value ?? "").trim();
-  return /^\d{1,6}$/.test(text) ? text : "";
+  const match = /^(.*?)(\d{1,6})$/.exec(text);
+  if (!match) return null;
+  const [, prefix, digits] = match;
+  if (prefix && (!CALLSIGN_PREFIX_CHARS.test(prefix) || /^\d+$/.test(prefix))) return null;
+  return { prefix, number: Number(digits), width: digits.length };
 }
 
-// Every callsign in a rank's declared block, keeping the digit width of the
-// lower bound so a block written as 007-012 doesn't come out as 7, 8, 9.
+function sanitizeCallsignBound(value) {
+  const text = String(value ?? "").trim();
+  return parseCallsign(text) ? text : "";
+}
+
+function formatCallsign(prefix, number, width) {
+  return `${prefix}${String(number).padStart(width, "0")}`;
+}
+
 const MAX_GENERATED_SLOTS = 300;
 
 function callsignsInRange(from, to) {
-  const start = Number(from);
-  const end = Number(to);
-  if (!from || !to || !Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
-  const width = String(from).length;
+  const start = parseCallsign(from);
+  const end = parseCallsign(to);
+  if (!start || !end) return [];
+  // Both ends have to be the same series — "D-325 to 330" isn't a range.
+  // Compared exactly, because generation uses `start.prefix` verbatim: letting
+  // D-100 and d-100 count as one series would emit a casing neither end asked
+  // for, and the duplicate checks below match on the literal string.
+  if (start.prefix !== end.prefix) return [];
+  if (end.number < start.number) return [];
   const out = [];
-  for (let n = start; n <= end && out.length < MAX_GENERATED_SLOTS; n += 1) {
-    out.push(String(n).padStart(width, "0"));
+  for (let n = start.number; n <= end.number && out.length < MAX_GENERATED_SLOTS; n += 1) {
+    out.push(formatCallsign(start.prefix, n, start.width));
   }
   return out;
 }
@@ -493,9 +519,12 @@ function overlappingRankBlocks(ranks) {
   const claimed = new Map();
   for (const rank of ranks) {
     for (const callsign of callsignsInRange(rank.callsignFrom, rank.callsignTo)) {
-      const owner = claimed.get(callsign);
+      // Keyed case-insensitively: D-325 and d-325 are the same callsign to
+      // everyone reading the roster, so two ranks can't each claim one.
+      const key = callsign.toLowerCase();
+      const owner = claimed.get(key);
       if (owner && owner !== rank.name) return { callsign, a: owner, b: rank.name };
-      claimed.set(callsign, rank.name);
+      claimed.set(key, rank.name);
     }
   }
   return null;
@@ -1580,6 +1609,19 @@ async function handleApi(req, res) {
   if (req.method === "PUT" && url.pathname === "/api/ranks") {
     if (!requireManageRanks(user, res)) return;
     const payload = await bodyJson(req);
+    // Sanitising blanks anything unparseable, so check the raw text first —
+    // otherwise a typo'd callsign silently clears the field and looks saved.
+    for (const raw of Array.isArray(payload.ranks) ? payload.ranks : []) {
+      for (const field of ["callsignFrom", "callsignTo"]) {
+        const value = String(raw?.[field] ?? "").trim();
+        if (value && !parseCallsign(value)) {
+          send(res, 400, {
+            error: `"${value}" isn't a callsign this can count from. Use a number, optionally with a prefix — 325, D-325, SWAT-01.`
+          });
+          return;
+        }
+      }
+    }
     const ranks = sanitizeRankList(payload.ranks);
     if (!ranks.length) {
       send(res, 400, { error: "At least one rank is required." });
@@ -1604,7 +1646,22 @@ async function handleApi(req, res) {
         send(res, 400, { error: `${rank.name} needs both a start and an end callsign, or neither.` });
         return;
       }
-      if (hasFrom && Number(rank.callsignTo) < Number(rank.callsignFrom)) {
+      if (!hasFrom) continue;
+      const start = parseCallsign(rank.callsignFrom);
+      const end = parseCallsign(rank.callsignTo);
+      if (!start || !end) {
+        send(res, 400, {
+          error: `${rank.name}'s callsigns need to end in a number — 325, D-325 and SWAT-01 all work.`
+        });
+        return;
+      }
+      if (start.prefix !== end.prefix) {
+        send(res, 400, {
+          error: `${rank.name}'s range mixes two formats (${rank.callsignFrom} and ${rank.callsignTo}). Both ends need the same prefix.`
+        });
+        return;
+      }
+      if (end.number < start.number) {
         send(res, 400, { error: `${rank.name}'s callsign range runs backwards (${rank.callsignFrom}–${rank.callsignTo}).` });
         return;
       }
@@ -1641,8 +1698,10 @@ async function handleApi(req, res) {
       return;
     }
     const roster = await readJson(rosterPath);
-    const taken = new Set(roster.roster.map((entry) => String(entry.callsign || "").trim()).filter(Boolean));
-    const missing = block.filter((callsign) => !taken.has(callsign));
+    const taken = new Set(
+      roster.roster.map((entry) => String(entry.callsign || "").trim().toLowerCase()).filter(Boolean)
+    );
+    const missing = block.filter((callsign) => !taken.has(callsign.toLowerCase()));
     for (const callsign of missing) {
       roster.roster.push(sanitizeRosterEntry({
         callsign,
